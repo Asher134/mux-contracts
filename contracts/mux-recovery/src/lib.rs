@@ -5,6 +5,11 @@
  * timelock (~24 hours at 5-second ledger close) before the new owner
  * can take control. The current owner may cancel a pending recovery at
  * any time during the timelock window.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -498,5 +503,21 @@ mod tests {
             .unwrap_err()
             .unwrap();
         assert_eq!(err, RecoveryError::NoActiveRecovery);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_recv")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("rec_init"),
+            symbol_short!("rec_cncl"),
+            symbol_short!("rec_exec"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }

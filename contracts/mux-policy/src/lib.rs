@@ -5,6 +5,11 @@
  * counter resets automatically once the current day (measured in ledgers)
  * has elapsed.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * # Public Interface
  *
  * - `initialize(admin)` — One-time setup with admin authorization
@@ -595,5 +600,21 @@ mod tests {
         assert_eq!(record.spent, 500);
         // One more unit must fail.
         assert!(client.try_record_spend(&wallet, &1_i128).is_err());
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_pol")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("lmt_set"),
+            symbol_short!("spent"),
+            symbol_short!("ctr_rst"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }

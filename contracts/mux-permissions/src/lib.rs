@@ -4,6 +4,11 @@
  * Implements a role-based access control (RBAC) registry that other Mux
  * contracts can call to verify caller permissions before executing
  * privileged operations.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -815,5 +820,28 @@ mod integration_tests {
         client.create_role(&role, &Vec::new(&env));
         let members = client.get_role_members(&role);
         assert_eq!(members.len(), 0);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_perm")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("role_crt"),
+            symbol_short!("role_grt"),
+            symbol_short!("role_rev"),
+            symbol_short!("perm_ok"),
+            symbol_short!("perm_den"),
+            symbol_short!("adm_thr"),
+            symbol_short!("adm_prp"),
+            symbol_short!("adm_apr"),
+            symbol_short!("adm_prm"),
+            symbol_short!("meta_set"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }
