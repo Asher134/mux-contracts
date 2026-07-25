@@ -5,6 +5,11 @@
  * counter resets automatically once the current day (measured in ledgers)
  * has elapsed.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * # Public Interface
  *
  * - `initialize(admin)` — One-time setup with admin authorization
@@ -53,8 +58,10 @@ fn emit(
 pub enum DataKey {
     Admin,
     /// Per-wallet daily spend limit record.
-    WalletLimit(Address),    /// List of all wallets with configured limits (for griefing guard).
-    WalletNames,}
+    WalletLimit(Address),
+    /// List of all wallets with configured limits (for griefing guard).
+    WalletNames,
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -114,9 +121,10 @@ impl MuxPolicy {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::WalletNames, &soroban_sdk::Vec::<Address>::new(&env));
+        env.storage().instance().set(
+            &DataKey::WalletNames,
+            &soroban_sdk::Vec::<Address>::new(&env),
+        );
         emit(&env, symbol_short!("init"), admin);
         Self::extend_ttl(&env);
         Ok(())
@@ -167,7 +175,9 @@ impl MuxPolicy {
                 return Err(MuxPolicyError::TooManyWallets);
             }
             wallet_names.push_back(wallet.clone());
-            env.storage().instance().set(&DataKey::WalletNames, &wallet_names);
+            env.storage()
+                .instance()
+                .set(&DataKey::WalletNames, &wallet_names);
         }
 
         let record = DailyLimit {
@@ -595,5 +605,21 @@ mod tests {
         assert_eq!(record.spent, 500);
         // One more unit must fail.
         assert!(client.try_record_spend(&wallet, &1_i128).is_err());
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_pol")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("lmt_set"),
+            symbol_short!("spent"),
+            symbol_short!("ctr_rst"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }

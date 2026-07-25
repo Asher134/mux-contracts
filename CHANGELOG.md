@@ -8,10 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Coverage report stub hardened in `scripts/coverage.sh` (`--stub`), Makefile `coverage` target, and `scripts/test-coverage.sh` crate-list checks (#469)
-- `Cargo.lock` policy documented in `CONTRIBUTING.md` and developer onboarding; lockfile no longer gitignored (#471)
-- Registry miss-path unit tests for `get_metadata`: exact `ContractNotFound`, uninitialized contract, register-without-metadata, and unknown-after-registrations (#477)
-- Upgrade migration notes for `mux-account` in `docs/account-upgrade-migration.md` and inline module docs
+- Contract PR guidelines section in `CONTRIBUTING.md` covering `no_std` safety, error enum conventions, storage bounds, TTL management, unit tests, and a pre-review checklist (#489, #490, #503, #504)
+- `SECURITY.md` with vulnerability disclosure policy, scope, safe-harbor guidelines, and response timeline (#490)
+- Complete contract index in `contracts/README.md` covering all 10 contract crates (#503)
+- `docs/bindings-error-mapping.md` documenting how Rust error enums map to TS unions and HTTP status codes (#504)
+- All 10 contract error enums documented in `docs/error_codes.md` (previously only 5 were listed; added mux-delegation, mux-policy, mux-recovery, mux-spending-policy, mux-wallet-registry) (#504)
+
+### Changed
+- Upgraded migration notes for `mux-account` in `docs/account-upgrade-migration.md` and inline module docs
 - `RegistryMeta` struct (`name`, `version`, `description`) and `DataKey::Metadata` storage key for `mux-account`
 - `set_metadata()` and `get_metadata()` contract functions on `mux-account` (owner-only write, public read)
 - Negative-path unit tests for `mux-account-factory`: exact error assertions for `InvalidAccount` and `TooManyAccounts`, `MetadataNotFound` after deploy without metadata, wrong-owner metadata lookup, and unauthorized deploy without auth

@@ -3,6 +3,11 @@
  *
  * Provides a factory contract that registers new MuxAccount instances and
  * maintains a per-owner index of deployed accounts.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -783,7 +788,19 @@ mod tests {
         let description = String::from_str(&env, "Test");
         let author = String::from_str(&env, "test");
         client.simulate_deploy_with_metadata(&owner, &account_addr, &version, &description, &author);
-        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert!(client.get_accounts(&owner).is_empty());
         assert_eq!(client.account_count(), 0);
     }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_fac")];
+        let actions = [symbol_short!("deployed"), symbol_short!("meta_set")];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
+    }
+}
 }
