@@ -325,7 +325,10 @@ impl MuxBatcher {
     /// separately from executed ones.
     ///
     /// Returns `Err(EmptyBatch)` or `Err(BatchTooLarge)` on invalid input.
-    /// Does **not** invoke target contracts.
+    /// Does **not** invoke target contracts or write any storage.
+    ///
+    /// See `docs/simulate-batch.md` for full usage patterns, limitations,
+    /// and TypeScript binding examples.
     pub fn simulate_batch(
         env: Env,
         caller: Address,

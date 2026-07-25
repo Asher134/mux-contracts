@@ -619,6 +619,51 @@ mod tests {
     }
 
     #[test]
+    fn test_double_initialize_returns_already_initialized_error() {
+        let (env, client, owner) = setup();
+        let guardians: Vec<Address> = Vec::new(&env);
+        client.initialize(&owner, &guardians);
+        let result = client.try_initialize(&owner, &guardians);
+        assert_eq!(
+            result,
+            Err(Ok(MuxAccountError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_with_different_owner_returns_already_initialized() {
+        let (env, client, owner) = setup();
+        let guardians: Vec<Address> = Vec::new(&env);
+        client.initialize(&owner, &guardians);
+        let other_owner = Address::generate(&env);
+        let result = client.try_initialize(&other_owner, &guardians);
+        assert_eq!(
+            result,
+            Err(Ok(MuxAccountError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_with_guardians_returns_already_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let client = MuxAccountClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        let guardians = soroban_sdk::vec![&env, g1, g2];
+        client.initialize(&owner, &guardians);
+        // Second init with different guardians still fails with AlreadyInitialized.
+        let new_guardians = soroban_sdk::vec![&env, Address::generate(&env)];
+        let result = client.try_initialize(&owner, &new_guardians);
+        assert_eq!(
+            result,
+            Err(Ok(MuxAccountError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
     fn test_set_and_remove_delegate() {
         let (env, client, owner) = setup();
         let guardians: Vec<Address> = Vec::new(&env);

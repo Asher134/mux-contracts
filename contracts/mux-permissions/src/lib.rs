@@ -581,6 +581,34 @@ mod tests {
     }
 
     #[test]
+    fn test_double_initialize_returns_already_initialized_error() {
+        let (env, client, _admin) = setup();
+        let other = Address::generate(&env);
+        let result = client.try_initialize(&other);
+        assert_eq!(
+            result,
+            Err(Ok(MuxPermissionsError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_after_setup_returns_already_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxPermissions);
+        let client = MuxPermissionsClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        // First init succeeds.
+        assert!(client.try_initialize(&admin).is_ok());
+        // Second init with the same admin must return AlreadyInitialized.
+        let result = client.try_initialize(&admin);
+        assert_eq!(
+            result,
+            Err(Ok(MuxPermissionsError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
     fn test_ttl_extended_on_write() {
         // Verify that initialize bumps instance TTL (T-21 mitigation).
         // setup() calls initialize; if extend_ttl was missing the SDK would
