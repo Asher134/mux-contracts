@@ -306,11 +306,20 @@ stellar contract deploy --wasm target/wasm32-unknown-unknown/release/mux_account
 - [Access Control Review Checklist](docs/access-control-checklist.md) — pre-deployment and pre-audit checklist
 - [Storage Griefing Notes](docs/storage-griefing.md) — collection caps, TTL management, keeper runbook
 - [External Audit Prep](docs/audit-prep.md) — scope, entry points, known limitations, auditor checklist
+- [Error Codes Reference](docs/error_codes.md) — all contract error codes and HTTP mappings
+- [Bindings Error Mapping](docs/bindings-error-mapping.md) — how Rust error enums flow to TS unions and HTTP statuses
 
-To report a vulnerability, open a private security advisory on GitHub.
+## Security
+
+See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy and
+safe-harbor guidelines.
+
+To report a vulnerability, open a private security advisory on GitHub or email
+**security@mux-protocol.xyz**.
 
 ## Contributing
 
+- [CONTRIBUTING.md](CONTRIBUTING.md) — commit conventions, PR process, contract PR guidelines
 - [Breaking Change Policy](docs/BREAKING_CHANGES.md) — guidelines for backward compatibility, deprecation periods, and versioning
 
 ## License
