@@ -97,4 +97,5 @@ Run this job at least once every **25 days** to stay ahead of the 30-day TTL win
 | T-20 | Spend limits accumulate unbounded per-asset keys | No public write path; owner-only |
 | T-21 | Instance storage TTL expiry causes silent data loss | `extend_ttl` on every write + keeper job |
 | T-22 | Owner floods wallet registry with distinct names | `MAX_WALLETS = 256` in `register_wallet` |
+| T-23 | Admin floods mux-registry `Names` vec | `MAX_CONTRACTS = 128` in `register` / `register_with_metadata` (`TooManyContracts`) |
 | T-23 | Owner floods session key index for an account | `MAX_SESSION_KEYS = 32` in `require_session_key_cap` |

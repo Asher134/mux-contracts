@@ -240,10 +240,11 @@ impl MuxRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
     use soroban_sdk::{
         symbol_short,
-        testutils::{Address as _, Events},
-        Env, FromVal, String,
+        testutils::Address as _,
+        Env, String,
     };
 
     fn setup() -> (Env, MuxRegistryClient<'static>, Address) {
@@ -348,6 +349,7 @@ mod tests {
         let version = String::from_str(&env, "1.0.0");
         let desc = String::from_str(&env, "desc");
         let author = String::from_str(&env, "mux-labs");
+        let repo = String::from_str(&env, "https://github.com/mux-labs/mux-contracts");
 
         // Fill the registry to exactly MAX_CONTRACTS (128) entries.
         // Two-letter base-26 symbols: "aa"=0 … "ex"=127, "ey"=128.
@@ -361,7 +363,7 @@ mod tests {
 
         // One more new name must be rejected by register_with_metadata.
         let overflow = soroban_sdk::Symbol::new(&env, "ey");
-        let result = client.try_register_with_metadata(&overflow, &version, &desc, &author);
+        let result = client.try_register_with_metadata(&overflow, &version, &desc, &author, &repo);
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
 
@@ -390,3 +392,83 @@ mod tests {
         let result = client.try_register(&overflow, &version);
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
+
+    fn register_name_batch(env: &Env, client: &MuxRegistryClient, count: u32) {
+        let version = String::from_str(env, "1.0.0");
+        for i in 0..count {
+            let sym = soroban_sdk::Symbol::new(
+                env,
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
+            );
+            client.register(&sym, &version);
+        }
+    }
+
+    /// Registering the 128th unique name succeeds; storage stays at MAX_CONTRACTS.
+    #[test]
+    fn test_register_at_max_contracts_boundary_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        register_name_batch(&env, &client, MAX_CONTRACTS - 1);
+        assert_eq!(client.list_contracts().len(), MAX_CONTRACTS - 1);
+
+        let boundary = soroban_sdk::Symbol::new(&env, "ex");
+        let version = String::from_str(&env, "1.0.0");
+        assert!(client.try_register(&boundary, &version).is_ok());
+        assert_eq!(client.list_contracts().len(), MAX_CONTRACTS);
+    }
+
+    /// Updating an existing name at capacity does not grow the Names vector.
+    #[test]
+    fn test_register_update_at_capacity_does_not_grow_names() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        register_name_batch(&env, &client, MAX_CONTRACTS);
+        assert_eq!(client.list_contracts().len(), MAX_CONTRACTS);
+
+        let existing = soroban_sdk::Symbol::new(&env, "aa");
+        let v2 = String::from_str(&env, "2.0.0");
+        assert!(client.try_register(&existing, &v2).is_ok());
+        assert_eq!(client.get_version(&existing), v2);
+        assert_eq!(client.list_contracts().len(), MAX_CONTRACTS);
+    }
+
+    #[test]
+    fn test_register_with_metadata_at_max_contracts_boundary_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        register_name_batch(&env, &client, MAX_CONTRACTS - 1);
+
+        let boundary = soroban_sdk::Symbol::new(&env, "ex");
+        let version = String::from_str(&env, "1.0.0");
+        let desc = String::from_str(&env, "desc");
+        let author = String::from_str(&env, "mux-labs");
+        let repo = String::from_str(&env, "https://github.com/mux-labs/mux-contracts");
+        assert!(client
+            .try_register_with_metadata(&boundary, &version, &desc, &author, &repo)
+            .is_ok());
+        assert_eq!(client.list_contracts().len(), MAX_CONTRACTS);
+    }
+}
