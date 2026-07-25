@@ -3,6 +3,11 @@
  *
  * Allows an owner to register and look up wallet addresses by a symbolic name.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * ## Upgrade Migration Notes
  *
  * When upgrading this contract to a new version:
