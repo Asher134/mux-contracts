@@ -27,7 +27,11 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
+extern crate alloc;
+
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -40,6 +44,18 @@ pub enum DataKey {
     Wallet(Symbol),
     /// List of wallet names registered in this contract.
     Names,
+    /// Optional metadata for a registered wallet: `DataKey::Metadata(name)`.
+    Metadata(Symbol),
+}
+
+/// Descriptive metadata attached to a registered wallet.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WalletMetadata {
+    /// Short human-readable label.
+    pub label: String,
+    /// Optional free-form description.
+    pub description: String,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -209,7 +225,8 @@ impl MuxWalletRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{symbol_short, testutils::Address as _, Env, String};
+    use alloc::format;
+    use soroban_sdk::{symbol_short, testutils::Address as _, Env, FromVal, String};
 
     fn setup() -> (Env, MuxWalletRegistryClient<'static>, Address) {
         let env = Env::default();
@@ -246,6 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn test_double_initialize_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        client.initialize(&owner);
+
+        let result = client.try_initialize(&owner);
+        assert_eq!(result, Err(Ok(WalletRegistryError::AlreadyInitialized)));
+    }
+
+    #[test]
+    fn test_double_initialize_with_different_owner_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let other = Address::generate(&env);
+        client.initialize(&owner);
+
+        let result = client.try_initialize(&other);
+        assert_eq!(result, Err(Ok(WalletRegistryError::AlreadyInitialized)));
+
+        // Original owner must still be able to register after the rejected re-init.
+        let name = symbol_short!("alice");
+        let wallet = Address::generate(&env);
+        assert!(client.try_register_wallet(&name, &wallet).is_ok());
+        assert_eq!(client.get_wallet(&name), wallet);
+    }
+
+    #[test]
     fn test_register_and_get_wallet() {
         let (env, client, _) = setup();
         let name = symbol_short!("alice");
@@ -259,7 +309,7 @@ mod tests {
         let (env, client, _) = setup();
         env.budget().reset_unlimited();
         for i in 0..MAX_WALLETS {
-            let name = soroban_sdk::Symbol::new(&env, format!("wallet{}", i));
+            let name = soroban_sdk::Symbol::new(&env, &format!("wallet{}", i));
             let wallet = Address::generate(&env);
             client.register_wallet(&name, &wallet);
         }

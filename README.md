@@ -274,6 +274,14 @@ Supported options:
 - `--arg <value>` — argument values; repeatable
 - `--simulate-only` — simulate without submitting
 
+**Post-deploy smoke checks** (simulate-only reads across core contracts):
+
+```bash
+bash scripts/local-invoke-smoke.sh --secret-key S... --network localnet
+# List planned checks without RPC:
+bash scripts/local-invoke-smoke.sh --dry-run
+```
+
 If dependencies are not installed, run:
 
 ```bash
