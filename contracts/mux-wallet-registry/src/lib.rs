@@ -3,6 +3,11 @@
  *
  * Allows an owner to register and look up wallet addresses by a symbolic name.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * ## Upgrade Migration Notes
  *
  * When upgrading this contract to a new version:
@@ -27,8 +32,6 @@
 
 #![no_std]
 
-extern crate alloc;
-
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
 };
@@ -44,17 +47,17 @@ pub enum DataKey {
     Wallet(Symbol),
     /// List of wallet names registered in this contract.
     Names,
-    /// Optional metadata for a registered wallet: `DataKey::Metadata(name)`.
+    /// Optional metadata associated with a wallet name.
     Metadata(Symbol),
 }
 
-/// Descriptive metadata attached to a registered wallet.
+/// Descriptive metadata attached to a wallet entry.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct WalletMetadata {
-    /// Short human-readable label.
+    /// Human-readable label for the wallet.
     pub label: String,
-    /// Optional free-form description.
+    /// Free-form description / notes.
     pub description: String,
 }
 
@@ -181,6 +184,20 @@ impl MuxWalletRegistry {
         description: String,
     ) -> Result<(), WalletRegistryError> {
         Self::require_owner(&env)?;
+        let mut names: Vec<Symbol> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Names)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if !names.contains(&name) {
+            if names.len() >= MAX_WALLETS {
+                return Err(WalletRegistryError::TooManyWallets);
+            }
+            names.push_back(name.clone());
+            env.storage().instance().set(&DataKey::Names, &names);
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::Wallet(name.clone()), &wallet);
@@ -188,6 +205,7 @@ impl MuxWalletRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Metadata(name), &meta);
+        Self::extend_ttl(&env);
         Ok(())
     }
 

@@ -9,6 +9,11 @@
  * 64 permissions. All state-mutating operations require owner authorization
  * and emit an audit event under the `mux_dlg` contract tag.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * Error codes 6001–6004 are stable ABI — coordinate changes with a registry
  * version bump.
  */
@@ -504,5 +509,21 @@ mod tests {
 
         let result = client.try_grant_delegate(&owner, &Address::generate(&env), &perms);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_error_code_too_many_delegates() {
+        assert_eq!(MuxDelegationError::TooManyDelegates as u32, 6004);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_dlg")];
+        let actions = [symbol_short!("dlg_grant"), symbol_short!("dlg_rev")];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }

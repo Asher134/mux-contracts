@@ -3,6 +3,11 @@
  *
  * Allows atomically executing a sequence of cross-contract calls in a
  * single transaction, with optional per-operation authorization checks.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -325,7 +330,10 @@ impl MuxBatcher {
     /// separately from executed ones.
     ///
     /// Returns `Err(EmptyBatch)` or `Err(BatchTooLarge)` on invalid input.
-    /// Does **not** invoke target contracts.
+    /// Does **not** invoke target contracts or write any storage.
+    ///
+    /// See `docs/simulate-batch.md` for full usage patterns, limitations,
+    /// and TypeScript binding examples.
     pub fn simulate_batch(
         env: Env,
         caller: Address,
@@ -926,5 +934,22 @@ mod tests {
             kind: BatchOperationKind::Invoke,
         });
         let _ = client.try_submit_batch(&ops);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_bat")];
+        let actions = [
+            symbol_short!("bat_start"),
+            symbol_short!("executed"),
+            symbol_short!("bat_ok"),
+            symbol_short!("bat_abort"),
+            symbol_short!("sim_done"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }

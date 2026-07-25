@@ -5,6 +5,14 @@
  * It supports registration with optional metadata, discovery queries, and
  * storage griefing guards via capped collections.
  *
+ * # `no_std` and `alloc` Constraints
+ *
+ * This crate is `#![no_std]` and uses `extern crate alloc` for heap-backed
+ * collection types. The Soroban VM provides a heap allocator on-chain, so
+ * `alloc` types are safe to use. However, prefer `soroban_sdk` collection
+ * types (`Vec`, `String`) for consistency with other Mux contracts and for
+ * gas-predictable storage access.
+ *
  * # Public Interface
  *
  * - `initialize(admin)` — One-time setup with admin authorization
@@ -354,7 +362,11 @@ mod tests {
         for i in 0u32..128 {
             let sym = soroban_sdk::Symbol::new(
                 &env,
-                &format!("{}{}", (b'a' + (i / 26) as u8) as char, (b'a' + (i % 26) as u8) as char),
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
             );
             client.register(&sym, &version);
         }
@@ -381,7 +393,11 @@ mod tests {
         for i in 0u32..128 {
             let sym = soroban_sdk::Symbol::new(
                 &env,
-                &format!("{}{}", (b'a' + (i / 26) as u8) as char, (b'a' + (i % 26) as u8) as char),
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
             );
             client.register(&sym, &version);
         }
@@ -390,3 +406,19 @@ mod tests {
         let result = client.try_register(&overflow, &version);
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_reg")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("reg"),
+            symbol_short!("regmeta"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
+    }
+}
