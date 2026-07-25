@@ -97,6 +97,24 @@ All state-mutating operations emit a structured event with topics `[mux_pol, act
 
 Instance storage TTL is extended on every write (`TTL_THRESHOLD = 17 280`, `TTL_EXTEND_TO = 518 400` ledgers ≈ 30 days). Deployers should run a keeper job to extend TTL proactively; see [storage-griefing.md](storage-griefing.md).
 
+## Authorization Requirements
+
+Every state-mutating function in `mux-policy` is gated by a specific authorization check:
+
+| Function | Auth check | Who can call |
+|---|---|---|
+| `initialize` | `admin.require_auth()` | Deployer (once) |
+| `set_daily_limit` | `require_admin()` → `admin.require_auth()` | Admin only |
+| `record_spend` | `wallet.require_auth()` | The wallet itself only |
+| `reset_daily_counter` | `require_admin()` → `admin.require_auth()` | Admin only |
+| `upgrade` | `require_admin()` → `admin.require_auth()` | Admin only |
+
+Key invariants:
+- **Wallet-only spend recording:** `record_spend` requires the wallet address to authorize the call. A third party (e.g. another wallet, a relayer, or the admin) cannot debit a wallet's allowance. This prevents unauthorized spending even if the admin is compromised.
+- **Admin-only limit configuration:** Only the admin set at initialization can create or modify daily limits. The wallet cannot self-escalate its own limit.
+- **No cross-wallet debit:** Wallet A's `record_spend` call cannot affect wallet B's `DailyLimit` record. Each wallet's limit is stored under `DataKey::WalletLimit(Address)` — a unique key per wallet.
+- **Read-only queries are unauthenticated:** `get_daily_limit` requires no authorization; anyone can query a wallet's current limit and spent amount.
+
 ## Security Considerations
 
 - Only the admin can configure limits.

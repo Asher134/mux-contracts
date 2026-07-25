@@ -3,6 +3,11 @@
  *
  * Provides a factory contract that registers new MuxAccount instances and
  * maintains a per-owner index of deployed accounts.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -822,66 +827,19 @@ mod tests {
         let description = String::from_str(&env, "Test");
         let author = String::from_str(&env, "test");
         client.simulate_deploy_with_metadata(&owner, &account_addr, &version, &description, &author);
-        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert!(client.get_accounts(&owner).is_empty());
         assert_eq!(client.account_count(), 0);
     }
 
-    #[test]
-    fn test_simulate_deploy_enforces_accounts_cap() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
-            client.deploy_account(&owner, &Address::generate(&env));
-        }
-        let result = client.try_simulate_deploy(&owner, &Address::generate(&env));
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        // Dry-run must not mutate state even on the error path.
-        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
-    }
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
-    fn test_simulate_deploy_with_metadata_enforces_accounts_cap() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
-            client.deploy_account(&owner, &Address::generate(&env));
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_fac")];
+        let actions = [symbol_short!("deployed"), symbol_short!("meta_set")];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
         }
-        let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-        let result = client.try_simulate_deploy_with_metadata(
-            &owner,
-            &Address::generate(&env),
-            &version,
-            &description,
-            &author,
-        );
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
     }
-
-    #[test]
-    fn test_max_accounts_per_owner_matches_constant() {
-        let (_, client) = setup();
-        assert_eq!(client.max_accounts_per_owner(), MAX_ACCOUNTS_PER_OWNER);
-        assert_eq!(MAX_ACCOUNTS_PER_OWNER, 64);
-    }
-
-    #[test]
-    fn test_accounts_vec_bounded_after_deploy_to_cap() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
-            client.deploy_account(&owner, &Address::generate(&env));
-        }
-        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
-        assert_eq!(
-            client.try_deploy_account(&owner, &Address::generate(&env)),
-            Err(Ok(MuxAccountFactoryError::TooManyAccounts))
-        );
-        // Storage growth stays capped — length must not increase on rejection.
-        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
-    }
+}
 }

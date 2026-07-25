@@ -1,4 +1,4 @@
-.PHONY: all build test clean fmt lint clippy wasm check-sizes
+.PHONY: all build test clean fmt lint clippy wasm check-sizes coverage
 
 all: fmt lint build test
 
@@ -24,3 +24,7 @@ wasm:
 
 check-sizes: wasm
 	bash scripts/check-contract-sizes.sh
+
+# LLVM source-based coverage. Prints a report stub if llvm-tools-preview is missing.
+coverage:
+	bash scripts/coverage.sh

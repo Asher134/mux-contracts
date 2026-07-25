@@ -79,6 +79,111 @@ Example entry:
 - Session key validation now correctly handles zero timestamps (#25)
 ```
 
+## Contract PR Guidelines
+
+All PRs that modify Soroban contract code under `contracts/` must satisfy the following before merge.
+
+### `no_std` Safety
+
+Every contract crate is `#![no_std]`. Do **not** add `std` imports or any dependency
+that pulls in the standard library. The WASM target (`wasm32-unknown-unknown`) does
+not provide `std`.
+
+- Use `soroban_sdk` types (`Vec`, `Map`, `String`, `BytesN`, …) instead of `alloc` /
+  `std` collections where possible.
+- If you genuinely need `alloc` (e.g. `Vec` in a non-Soroban context), gate it behind
+  `extern crate alloc;` and ensure the crate compiles with `--target wasm32-unknown-unknown`.
+- Verify with `cargo build --target wasm32-unknown-unknown --release -p <crate>` before pushing.
+
+### Error Enums
+
+Every contract **must** define a single `#[contracterror]` enum in its root `lib.rs`.
+
+```rust
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum MyContractError {
+    NotInitialized = 1,
+    AlreadyInitialized = 2,
+    Unauthorized = 3,
+    // … contract-specific variants
+}
+```
+
+Rules:
+- Variants are `#[repr(u32)]` with unique codes. Start at `1` and increment sequentially.
+- Always include `NotInitialized` (1), `AlreadyInitialized` (2), and `Unauthorized` (3)
+  where applicable — these map to standard HTTP status codes in the TypeScript bindings.
+- Do **not** reuse codes across contracts; each contract owns its own code space.
+- Add a brief doc comment on every variant explaining when it is returned.
+- After adding or changing variants, update:
+  - `docs/error_codes.md` — canonical Rust-side reference
+  - `bindings/src/types.ts` — the TS union type and `*ErrorMessage` map
+  - `bindings/src/errors.ts` — the `ERROR_HTTP_MAP` entry for the new variant
+
+### Storage Bounds
+
+All collection-backed storage (Vec, Map) **must** have an explicit cap to prevent
+storage griefing. Use a `const MAX_*: u32` constant and return a dedicated error
+when the cap is reached.
+
+```rust
+const MAX_WALLETS: u32 = 256;
+
+if wallet_names.len() >= MAX_WALLETS {
+    return Err(MuxPolicyError::TooManyWallets);
+}
+```
+
+Document the cap value and rationale in a comment next to the constant.
+
+### TTL Management
+
+Persistent storage entries **must** call `extend_ttl` on every write so that active
+data survives beyond the default ledger TTL. Follow the existing pattern:
+
+```rust
+const TTL_THRESHOLD: u32 = 17_280; // ~1 day
+const TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+
+env.storage()
+    .persistent()
+    .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+```
+
+Instance storage should also be extended after any state-mutating function.
+
+### Unit Tests
+
+Every public function must have at least one unit test. Tests live in a `#[cfg(test)] mod tests` block at the bottom of the contract's `lib.rs`.
+
+Minimum coverage per contract:
+- Happy-path for every public entry point.
+- Each error variant returned at least once.
+- Boundary / edge cases (zero amounts, overflow, capacity limits).
+- Event emission checks where events are emitted.
+
+Run `cargo test --package <crate>` and `cargo clippy --package <crate>` before
+pushing. The CI also runs `cargo test --workspace --all-features`.
+
+### Checklist
+
+Before requesting review on a contract PR:
+
+- [ ] `#![no_std]` — no `std` imports
+- [ ] `cargo build --target wasm32-unknown-unknown --release -p <crate>` succeeds
+- [ ] Error enum follows the convention (single `#[contracterror]`, `#[repr(u32)]`, codes start at 1)
+- [ ] `docs/error_codes.md` updated for new or changed error variants
+- [ ] TypeScript bindings regenerated (`bash scripts/generate-bindings.sh`)
+- [ ] `bindings/src/types.ts` union type and error-message map updated
+- [ ] `bindings/src/errors.ts` HTTP map updated for new variants
+- [ ] All collection storage has a cap (`MAX_*` constant + `TooMany*` error)
+- [ ] Persistent storage entries call `extend_ttl` on write
+- [ ] Unit tests cover happy path, each error variant, and edge cases
+- [ ] `cargo clippy --workspace --all-features` is clean
+- [ ] `cargo fmt --check` passes
+
 ## Code Style
 
 ### Rust
@@ -101,7 +206,26 @@ Example entry:
 - **Unit Tests** — Run `cargo test --lib`
 - **All Tests** — Run `cargo test --workspace --all-features`
 - **Integration Tests** — Require localnet setup (see README.md)
-- **Coverage** — Aim for >90% coverage on new code
+- **Coverage** — Aim for >90% coverage on new code. Generate a report with
+  `make coverage` or `bash scripts/coverage.sh` (add `--html` / `--lcov` as needed).
+  If `llvm-tools-preview` is not installed, the script prints a **coverage report stub**
+  listing workspace crates; validate the stub with `bash scripts/test-coverage.sh`.
+
+## Cargo.lock Policy
+
+This repository **commits `Cargo.lock`** and keeps it under version control.
+
+- **Why** — Soroban WASM builds must be reproducible for audits, CI cache keys, and
+  mainnet deploy checklists (`docs/MAINNET_DEPLOY_CHECKLIST.md`). Pinning transitive
+  crates via the lockfile reduces supply-chain drift between developers and CI.
+- **Do** — Commit lockfile updates in the same PR that bumps dependencies in
+  `Cargo.toml` / workspace members. Run `cargo update -p <crate>` (or a full
+  `cargo update` when intentional) and include the resulting `Cargo.lock` diff.
+- **Do not** — Add `Cargo.lock` to `.gitignore`, delete it from the tree, or regenerate
+  it casually without reviewing the diff (`cargo deny check` is recommended after
+  dependency changes).
+- **CI** — Workflows hash `Cargo.lock` for cache keys; keep the committed file in sync
+  with what CI builds.
 
 Example test:
 ```rust

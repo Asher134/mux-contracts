@@ -8,12 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Shared Soroban `try_*` assertions in `soroban-test-helpers` (`assert_contract_ok`, `assert_contract_err`, `assert_event_count`, `assert_len_at_most`, `assert_len_eq`)
-- `max_accounts_per_owner` query on `mux-account-factory`; Accounts vec bound mirrored on `simulate_deploy*`
-- Fuzz coverage for `mux-account` (spend limits, delegate cap) and `mux-batcher` (batch size gate) in `tests/fuzz_placeholder.rs`
-- `tests/fixtures/account_limit_vectors.json` for account / factory / batcher limit boundary vectors
-- `mux-contract-tests` workspace package to run integration/fuzz scaffolding
-- Upgrade migration notes for `mux-account` in `docs/account-upgrade-migration.md` and inline module docs
+- Contract PR guidelines section in `CONTRIBUTING.md` covering `no_std` safety, error enum conventions, storage bounds, TTL management, unit tests, and a pre-review checklist (#489, #490, #503, #504)
+- `SECURITY.md` with vulnerability disclosure policy, scope, safe-harbor guidelines, and response timeline (#490)
+- Complete contract index in `contracts/README.md` covering all 10 contract crates (#503)
+- `docs/bindings-error-mapping.md` documenting how Rust error enums map to TS unions and HTTP status codes (#504)
+- All 10 contract error enums documented in `docs/error_codes.md` (previously only 5 were listed; added mux-delegation, mux-policy, mux-recovery, mux-spending-policy, mux-wallet-registry) (#504)
+
+### Changed
+- Upgraded migration notes for `mux-account` in `docs/account-upgrade-migration.md` and inline module docs
 - `RegistryMeta` struct (`name`, `version`, `description`) and `DataKey::Metadata` storage key for `mux-account`
 - `set_metadata()` and `get_metadata()` contract functions on `mux-account` (owner-only write, public read)
 - Negative-path unit tests for `mux-account-factory`: exact error assertions for `InvalidAccount` and `TooManyAccounts`, `MetadataNotFound` after deploy without metadata, wrong-owner metadata lookup, and unauthorized deploy without auth
