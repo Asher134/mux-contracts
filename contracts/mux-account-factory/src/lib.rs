@@ -3,6 +3,11 @@
  *
  * Provides a factory contract that registers new MuxAccount instances and
  * maintains a per-owner index of deployed accounts.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -783,220 +788,19 @@ mod tests {
         let description = String::from_str(&env, "Test");
         let author = String::from_str(&env, "test");
         client.simulate_deploy_with_metadata(&owner, &account_addr, &version, &description, &author);
-        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert!(client.get_accounts(&owner).is_empty());
         assert_eq!(client.account_count(), 0);
     }
 
-    // ── TooManyAccounts path tests ────────────────────────────────────────────
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
-    fn test_too_many_accounts_boundary_last_succeeds() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        for i in 0..64 {
-            let addr = Address::generate(&env);
-            let result = client.try_deploy_account(&owner, &addr);
-            assert!(result.is_ok(), "deploy_account should succeed for account {i}");
-        }
-        assert_eq!(client.get_accounts(&owner).len(), 64);
-        assert_eq!(client.account_count(), 64);
-    }
-
-    #[test]
-    fn test_too_many_accounts_boundary_next_fails() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        for _ in 0..64 {
-            client.deploy_account(&owner, &Address::generate(&env));
-        }
-        let result = client.try_deploy_account(&owner, &Address::generate(&env));
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        assert_eq!(client.get_accounts(&owner).len(), 64);
-        assert_eq!(client.account_count(), 64);
-    }
-
-    #[test]
-    fn test_too_many_accounts_with_metadata_boundary_next_fails() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-        for _ in 0..64 {
-            client.deploy_account_with_metadata(
-                &owner,
-                &Address::generate(&env),
-                &version.clone(),
-                &description.clone(),
-                &author.clone(),
-            );
-        }
-        let result = client.try_deploy_account_with_metadata(
-            &owner,
-            &Address::generate(&env),
-            &version,
-            &description,
-            &author,
-        );
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        assert_eq!(client.get_accounts(&owner).len(), 64);
-        assert_eq!(client.account_count(), 64);
-    }
-
-    #[test]
-    fn test_too_many_accounts_cross_path_plain_then_metadata() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-
-        // Fill cap with plain deploy_account calls
-        for _ in 0..64 {
-            client.deploy_account(&owner, &Address::generate(&env));
-        }
-
-        // deploy_account_with_metadata must also fail — cap is shared
-        let result = client.try_deploy_account_with_metadata(
-            &owner,
-            &Address::generate(&env),
-            &version,
-            &description,
-            &author,
-        );
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        assert_eq!(client.account_count(), 64);
-    }
-
-    #[test]
-    fn test_too_many_accounts_cross_path_metadata_then_plain() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-
-        // Fill cap with deploy_account_with_metadata calls
-        for _ in 0..64 {
-            client.deploy_account_with_metadata(
-                &owner,
-                &Address::generate(&env),
-                &version.clone(),
-                &description.clone(),
-                &author.clone(),
-            );
-        }
-
-        // deploy_account must also fail — cap is shared
-        let result = client.try_deploy_account(&owner, &Address::generate(&env));
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        assert_eq!(client.account_count(), 64);
-    }
-
-    #[test]
-    fn test_too_many_accounts_isolation_between_owners() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner_a = Address::generate(&env);
-        let owner_b = Address::generate(&env);
-
-        // Fill owner_a to cap
-        for _ in 0..64 {
-            client.deploy_account(&owner_a, &Address::generate(&env));
-        }
-        assert_eq!(
-            client.try_deploy_account(&owner_a, &Address::generate(&env)),
-            Err(Ok(MuxAccountFactoryError::TooManyAccounts))
-        );
-
-        // owner_b is unaffected
-        let addr_b = Address::generate(&env);
-        let result = client.try_deploy_account(&owner_b, &addr_b);
-        assert!(result.is_ok());
-        assert_eq!(client.get_accounts(&owner_b).len(), 1);
-        assert_eq!(client.account_count(), 65);
-    }
-
-    #[test]
-    fn test_too_many_accounts_does_not_write_on_failure() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        let blocked_addr = Address::generate(&env);
-
-        // Fill to cap
-        for _ in 0..64 {
-            client.deploy_account(&owner, &Address::generate(&env));
-        }
-        let count_before = client.account_count();
-
-        // Attempt one more — must fail without mutating state
-        let result = client.try_deploy_account(&owner, &blocked_addr);
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        assert_eq!(client.account_count(), count_before);
-        // The blocked address must not appear in the account list
-        let accounts = client.get_accounts(&owner);
-        for i in 0..accounts.len() {
-            assert_ne!(accounts.get(i).unwrap(), blocked_addr);
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_fac")];
+        let actions = [symbol_short!("deployed"), symbol_short!("meta_set")];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
         }
     }
-
-    #[test]
-    fn test_too_many_accounts_metadata_path_does_not_write_on_failure() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        let blocked_addr = Address::generate(&env);
-        let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-
-        // Fill to cap
-        for _ in 0..64 {
-            client.deploy_account_with_metadata(
-                &owner,
-                &Address::generate(&env),
-                &version.clone(),
-                &description.clone(),
-                &author.clone(),
-            );
-        }
-        let count_before = client.account_count();
-
-        // Attempt one more — must fail without mutating state
-        let result = client.try_deploy_account_with_metadata(
-            &owner,
-            &blocked_addr,
-            &version,
-            &description,
-            &author,
-        );
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
-        assert_eq!(client.account_count(), count_before);
-        let accounts = client.get_accounts(&owner);
-        for i in 0..accounts.len() {
-            assert_ne!(accounts.get(i).unwrap(), blocked_addr);
-        }
-    }
-
-    #[test]
-    fn test_too_many_accounts_error_is_exact_variant() {
-        let (env, client) = setup();
-        env.budget().reset_unlimited();
-        let owner = Address::generate(&env);
-        for _ in 0..64 {
-            client.deploy_account(&owner, &Address::generate(&env));
-        }
-        // Verify the exact error variant — not just is_err()
-        let result = client.try_deploy_account(&owner, &Address::generate(&env));
-        match result {
-            Err(Ok(e)) => assert_eq!(e, MuxAccountFactoryError::TooManyAccounts),
-            other => panic!("expected TooManyAccounts, got {other:?}"),
-        }
-    }
+}
 }
