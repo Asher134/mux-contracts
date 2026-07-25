@@ -34,6 +34,44 @@ Caps are enforced on **new insertions only**; updates to existing entries are al
 
 String size limits are enforced on metadata fields to prevent storage bloat through large strings.
 
+### Vec-backed storage notes
+
+Most Mux registries and indexes are stored as Soroban `Vec<T>` values under a
+single instance (or persistent) key. Vec-backed collections are the primary
+storage-griefing surface because each `push_back` grows the serialized blob
+billed under that key.
+
+**Rules for every vec-backed write path:**
+
+1. **Cap before push** — compare `vec.len()` to the `MAX_*` constant and return
+   the matching `TooMany*` error **before** calling `push_back`.
+2. **Deduplicate on overwrite** — when a caller re-registers an existing entry
+   (same wallet name, same delegate, same contract symbol), update in place
+   and do **not** append a second copy to the index vec.
+3. **Remove on revoke** — delete paths must `remove` the element from the index
+   vec so revoked entries do not permanently inflate rent.
+4. **Prefer instance storage for small shared indexes** — per-owner / per-role
+   vecs that are enumerated often belong in instance storage with TTL extension
+   on every write (see below). Large per-pair permission sets may use
+   persistent storage but still require a hard cap.
+5. **No unbounded append helpers** — never expose a public entrypoint that
+   appends to a vec without both auth and a length check.
+
+**Contract checklist (vec-backed):**
+
+| Contract | Vec key | Cap check location | Overwrite / remove behavior |
+|---|---|---|---|
+| `mux-account-factory` | `Accounts(owner)` | `deploy_account` / `deploy_account_with_metadata` | Cap only; callers should avoid duplicate addresses |
+| `mux-delegation` | `OwnerDelegates(owner)` | `grant_delegate` | Skip push when delegate already present; `revoke_delegate` removes |
+| `mux-delegation` | `DelegatePerms(owner, delegate)` | `grant_delegate` | Full replace of permission vec (no append) |
+| `mux-permissions` | `RoleMembers` / `AccountRoles` | `grant_role` | Caps on new membership only |
+| `mux-registry` | `Names` | `register` / `register_with_metadata` | Name already present → update version/metadata only |
+| `mux-wallet-registry` | `Names` | `register_wallet*` | Existing name overwrites wallet; count unchanged |
+
+When adding a new vec-backed `DataKey`, update this table, add a unit test that
+fills to the cap and asserts the exact `TooMany*` error, and document the
+constant in [`docs/abi_reference.md`](abi_reference.md).
+
 ### TTL auto-extension
 
 Every write path in the Mux contracts calls:
@@ -97,7 +135,7 @@ Run this job at least once every **25 days** to stay ahead of the 30-day TTL win
 | T-19 | Admin assigns excessive roles to one account | `MAX_ROLES_PER_ACCOUNT = 32` in `grant_role` |
 | T-20 | Spend limits accumulate unbounded per-asset keys | No public write path; owner-only |
 | T-21 | Instance storage TTL expiry causes silent data loss | `extend_ttl` on every write + keeper job |
-| T-22 | Owner floods wallet registry with distinct names | `MAX_WALLETS = 256` in `register_wallet` |
+| T-22 | Owner floods wallet registry with distinct names | `MAX_WALLETS = 128` in `register_wallet` |
 | T-23 | Owner floods session key index for an account | `MAX_SESSION_KEYS = 32` in `require_session_key_cap` |
 
 ---

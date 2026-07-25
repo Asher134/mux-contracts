@@ -372,6 +372,77 @@ mod tests {
     }
 
     #[test]
+    fn test_grant_overwrite_updates_is_delegate_checks() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perm_a = symbol_short!("read");
+        let perm_b = symbol_short!("write");
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm_a.clone()]);
+        assert!(client.is_delegate(&owner, &delegate, &perm_a));
+        assert!(!client.is_delegate(&owner, &delegate, &perm_b));
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm_b.clone()]);
+        assert!(!client.is_delegate(&owner, &delegate, &perm_a));
+        assert!(client.is_delegate(&owner, &delegate, &perm_b));
+    }
+
+    #[test]
+    fn test_grant_overwrite_does_not_duplicate_owner_delegates() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, symbol_short!("read")]);
+        client.grant_delegate(&owner, &delegate, &vec![&env, symbol_short!("write")]);
+        client.grant_delegate(
+            &owner,
+            &delegate,
+            &vec![&env, symbol_short!("swap"), symbol_short!("vote")],
+        );
+
+        let delegates = client.get_delegates(&owner);
+        assert_eq!(delegates.len(), 1);
+        assert!(delegates.contains(&delegate));
+    }
+
+    #[test]
+    fn test_grant_overwrite_replaces_full_permission_set() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let old_a = symbol_short!("read");
+        let old_b = symbol_short!("write");
+        let new_a = symbol_short!("swap");
+        let new_b = symbol_short!("vote");
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, old_a.clone(), old_b.clone()]);
+        client.grant_delegate(&owner, &delegate, &vec![&env, new_a.clone(), new_b.clone()]);
+
+        let stored = client.get_delegate_permissions(&owner, &delegate);
+        assert_eq!(stored.len(), 2);
+        assert!(!stored.contains(&old_a));
+        assert!(!stored.contains(&old_b));
+        assert!(stored.contains(&new_a));
+        assert!(stored.contains(&new_b));
+    }
+
+    #[test]
+    fn test_grant_overwrite_with_empty_permissions_fails() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, symbol_short!("read")]);
+        let result = client.try_grant_delegate(&owner, &delegate, &Vec::new(&env));
+        assert_eq!(result, Err(Ok(MuxDelegationError::EmptyPermissions)));
+
+        // Prior grant must remain intact after the rejected overwrite.
+        assert!(client.is_delegate(&owner, &delegate, &symbol_short!("read")));
+    }
+
+    #[test]
     fn test_error_code_not_a_delegate() {
         assert_eq!(MuxDelegationError::NotADelegate as u32, 6001);
     }
