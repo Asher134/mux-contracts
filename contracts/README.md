@@ -1,131 +1,83 @@
 # Mux Protocol Contracts
 
-This directory contains the smart contracts for the Mux Protocol, a comprehensive account management and permission system for Stellar.
+This directory contains the Soroban smart contracts for the Mux Protocol. Each
+crate compiles to a WASM module deployable on Stellar.
 
-## Contracts
+## Contract Index
 
-### Core Contracts
+| Crate | Description |
+|---|---|
+| [`mux-account`](mux-account/) | Smart wallet with owner, delegates, session keys, and spend limits |
+| [`mux-account-factory`](mux-account-factory/) | Factory for deploying and registering account instances with metadata |
+| [`mux-batcher`](mux-batcher/) | Atomic multi-operation batching with optional per-op failure handling |
+| [`mux-delegation`](mux-delegation/) | Grant / revoke specific permissions or voting power to delegates |
+| [`mux-permissions`](mux-permissions/) | Role-based access control (RBAC) — roles, permissions, grant/revoke |
+| [`mux-policy`](mux-policy/) | Per-wallet daily spend-limit policy with auto-reset |
+| [`mux-recovery`](mux-recovery/) | Account recovery with timelock and admin approval |
+| [`mux-registry`](mux-registry/) | Contract version and metadata registry |
+| [`mux-spending-policy`](mux-spending-policy/) | Per-account/per-asset spend-limit policy and validation |
+| [`mux-wallet-registry`](mux-wallet-registry/) | Named wallet registry for address lookup |
 
-- **mux-account**: Smart account implementation with session management
-- **mux-account-factory**: Factory contract for creating new Mux accounts
-- **mux-permissions**: Role-based access control (RBAC) system
-- **mux-registry**: Contract registry for protocol management
-- **mux-batcher**: Batch transaction processing
+### Shared Crate
 
-### New Contracts
+| Crate | Description |
+|---|---|
+| [`soroban-test-helpers`](soroban-test-helpers/) | Shared mock environment and test utilities (not compiled to WASM) |
 
-- **mux-recovery**: Account recovery system for compromised or lost accounts
-- **mux-delegation**: Delegation system for permissions and voting power
-- **mux-spending-policy**: Contract for storing and checking per-account spend limits
+## Quick Reference
 
-## mux-spending-policy
-
-The spending-policy contract stores per-account/per-asset spend limits and validates spend requests against them.
-
-### Features
-
-- **Policy Management**: Admin can create or update spend policies for account/asset pairs
-- **Policy Reads**: Callers can retrieve the current policy for a specific account/asset pair
-- **Spend Validation**: `check_spend` rejects requests that exceed the configured limit
-- **Input Validation**: Non-positive limits and negative spend amounts are rejected with `InvalidInput`
-
-### Key Functions
-
-- `initialize(admin)`: Initialize the contract with an admin
-- `set_policy(account, asset, limit)`: Store or replace a spend policy for an account/asset pair
-- `get_policy(account, asset)`: Retrieve the configured policy for an account/asset pair
-- `check_spend(account, asset, amount)`: Validate a spend request against the configured policy
-
-### Errors
-
-- `PolicyNotFound`: No spend policy exists for the provided account/asset pair
-- `SpendLimitExceeded`: The requested spend is above the configured limit
-- `InvalidInput`: The provided limit is not positive or the requested spend is negative
-
-## mux-recovery
-
-The recovery contract provides a secure mechanism for account recovery when accounts are compromised or access is lost.
-
-### Features
-
-- **Recovery Request Struct**: Comprehensive tracking of recovery requests with metadata
-- **Admin Approval System**: Only authorized administrators can approve recovery requests
-- **Event Emission**: All recovery actions emit events for transparency and auditability
-- **Request Management**: Track pending and completed recovery requests
-
-### Key Functions
-
-- `initialize(admin)`: Initialize the contract with an admin
-- `request_recovery(old_account, new_account)`: Submit a recovery request
-- `approve_recovery(request_id)`: Admin function to approve recovery requests
-- `get_recovery_request(request_id)`: Retrieve recovery request details
-- `get_pending_requests()`: List all pending recovery requests
-
-### Events
-
-- `init`: Contract initialization
-- `req_sub`: Recovery request submitted
-- `req_app`: Recovery request approved
-
-## mux-delegation
-
-The delegation contract enables accounts to delegate specific permissions or voting power to other accounts.
-
-### Features
-
-- **Delegation Management**: Grant and revoke delegations with specific permissions
-- **Event Emission**: Emits `delegate_granted` events as required
-- **Permission Checking**: Verify delegated permissions
-- **Delegation Limits**: Prevents storage griefing with reasonable limits
-- **Bidirectional Tracking**: Track both delegators and delegates
-
-### Key Functions
-
-- `initialize(admin)`: Initialize the contract with an admin
-- `grant_delegation(delegator, delegate, permissions)`: Grant delegation with specific permissions
-- `revoke_delegation(delegator, delegate)`: Revoke an existing delegation
-- `has_delegation(delegator, delegate)`: Check if delegation exists and is active
-- `has_delegated_permission(delegator, delegate, permission)`: Check specific permission
-- `get_delegates(delegator)`: Get all delegates for an account
-- `get_delegators(delegate)`: Get all delegators for an account
-
-### Events
-
-- `init`: Contract initialization
-- `del_grant`: Delegation granted (the required `delegate_granted` event)
-- `del_revok`: Delegation revoked
-
-## Security Features
-
-Both contracts implement:
-
-- **Storage TTL Management**: Automatic TTL extension to prevent data loss
-- **Access Control**: Proper authorization checks
-- **Storage Griefing Protection**: Limits on data structures to prevent abuse
-- **Comprehensive Testing**: Full test coverage for all functionality
-- **Event Emission**: Transparent logging of all actions
-
-## Testing
-
-Run tests for individual contracts:
+### Build
 
 ```bash
-cargo test --package mux-recovery
-cargo test --package mux-delegation
+cargo build --target wasm32-unknown-unknown --release --workspace
 ```
 
-Or test all contracts:
+### Test
 
 ```bash
-cargo test
+cargo test --workspace --all-features
 ```
 
-## Integration
+### Per-contract test
 
-These contracts follow the same patterns as existing Mux Protocol contracts:
+```bash
+cargo test --package <crate>
+```
 
-- Consistent error handling with custom error types
-- Soroban SDK best practices
-- Storage optimization with TTL management
-- Comprehensive event emission for auditability
-- Modular design for easy integration
+## Common Patterns
+
+All contracts follow these conventions:
+
+- **`#![no_std]`** — no Rust standard library; WASM-target compatible.
+- **Single error enum** — each contract defines one `#[contracterror]` enum with
+  `#[repr(u32)]` codes starting at 1. Common variants (`NotInitialized = 1`,
+  `AlreadyInitialized = 2`, `Unauthorized = 3`) appear in most contracts.
+- **Storage griefing guards** — every collection-backed storage (Vec, Map) has an
+  explicit `MAX_*` cap with a dedicated error variant.
+- **TTL management** — persistent entries call `extend_ttl` on every write;
+  instance storage is extended after state-mutating functions.
+- **Event emission** — all state changes emit audit events under a contract-
+  specific topic prefix.
+
+## Error Codes
+
+See [docs/error_codes.md](../docs/error_codes.md) for the full error code
+reference across all contracts.
+
+## TypeScript Bindings
+
+Auto-generated clients for every contract live in [`../bindings/src/generated/`](../bindings/src/generated/).
+After changing any contract interface, regenerate with:
+
+```bash
+bash scripts/generate-bindings.sh
+```
+
+## Documentation
+
+- [Architecture Overview](../docs/architecture-overview.md)
+- [Threat Model](../docs/threat-model.md)
+- [Access Control Checklist](../docs/access-control-checklist.md)
+- [Storage Griefing Notes](../docs/storage-griefing.md)
+- [Error Codes Reference](../docs/error_codes.md)
+- [Audit Prep](../docs/audit-prep.md)
