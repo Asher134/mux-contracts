@@ -129,3 +129,41 @@ These contracts follow the same patterns as existing Mux Protocol contracts:
 - Storage optimization with TTL management
 - Comprehensive event emission for auditability
 - Modular design for easy integration
+
+## `no_std` and `alloc` Constraints
+
+All Soroban contract crates in this workspace are `#![no_std]`. The workspace
+`Cargo.toml` sets `unsafe_code = "forbid"` at the workspace level, so no
+crate may use `unsafe` blocks.
+
+### Why `no_std`?
+
+Soroban smart contracts compile to WASM (`wasm32-unknown-unknown`) and run
+inside the Soroban VM, which does not provide a system allocator or OS
+services. Using `no_std` ensures:
+
+1. **Correct compilation target** — the WASM target has no `std` library.
+2. **No hidden syscalls** — prevents accidental use of file I/O, networking,
+   or other OS primitives unavailable on-chain.
+3. **Smaller binary size** — `no_std` binaries are typically smaller, reducing
+   deployment costs.
+
+### `extern crate alloc`
+
+Only `mux-registry` currently uses `extern crate alloc`. This is allowed
+because the Soroban VM provides a heap allocator, and `alloc` types
+(`Vec`, `String`, `BTreeMap`, etc.) are safe to use in a `no_std` context
+when an allocator is available.
+
+Other contracts avoid `alloc` and rely exclusively on Soroban SDK types
+(`soroban_sdk::Vec`, `soroban_sdk::String`, etc.) which are backed by the
+Soroban host and do not require the Rust `alloc` crate.
+
+### Constraints for contributors
+
+- **Never add `extern crate std`** to any contract crate.
+- **Never add `unsafe` code** — the workspace-level `forbid` enforces this.
+- **Prefer `soroban_sdk` collection types** over `alloc` types for
+  consistency and gas predictability.
+- If `alloc` is needed, document why in the crate-level doc comment and
+  ensure the crate still compiles to `wasm32-unknown-unknown`.
