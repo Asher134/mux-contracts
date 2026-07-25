@@ -309,6 +309,17 @@ stellar contract deploy --wasm target/wasm32-unknown-unknown/release/mux_account
 
 To report a vulnerability, open a private security advisory on GitHub.
 
+## Testing & coverage
+
+```bash
+cargo test --workspace --all-features
+make coverage                          # LLVM coverage, or stub if tools missing
+bash scripts/coverage.sh --stub        # print coverage report stub only
+bash scripts/test-coverage.sh          # validate stub lists all mux-* crates
+```
+
+`Cargo.lock` is committed — see [CONTRIBUTING.md](CONTRIBUTING.md#cargolock-policy).
+
 ## Contributing
 
 - [Breaking Change Policy](docs/BREAKING_CHANGES.md) — guidelines for backward compatibility, deprecation periods, and versioning

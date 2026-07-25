@@ -240,10 +240,11 @@ impl MuxRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
     use soroban_sdk::{
         symbol_short,
-        testutils::{Address as _, Events},
-        Env, FromVal, String,
+        testutils::Address as _,
+        Env, String,
     };
 
     fn setup() -> (Env, MuxRegistryClient<'static>, Address) {
@@ -281,7 +282,7 @@ mod tests {
     fn test_get_unknown_fails() {
         let (_env, client, _) = setup();
         let result = client.try_get_version(&symbol_short!("ghost"));
-        assert!(result.is_err());
+        assert_eq!(result, Err(Ok(MuxRegistryError::ContractNotFound)));
     }
 
     #[test]
@@ -309,7 +310,52 @@ mod tests {
     fn test_get_metadata_unknown_fails() {
         let (_env, client, _) = setup();
         let result = client.try_get_metadata(&symbol_short!("ghost"));
-        assert!(result.is_err());
+        assert_eq!(result, Err(Ok(MuxRegistryError::ContractNotFound)));
+    }
+
+    /// Uninitialized registry has no metadata keys — miss returns ContractNotFound
+    /// (same public error as an unknown name; does not require admin auth).
+    #[test]
+    fn test_get_metadata_on_uninitialized_returns_not_found() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        assert_eq!(
+            client.try_get_metadata(&symbol_short!("x")),
+            Err(Ok(MuxRegistryError::ContractNotFound))
+        );
+    }
+
+    /// `register` writes Version only — get_metadata must still miss with ContractNotFound.
+    #[test]
+    fn test_get_metadata_missing_after_register_without_metadata() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("bare");
+        let version = String::from_str(&env, "1.0.0");
+        client.register(&name, &version);
+        assert_eq!(client.get_version(&name), version);
+        assert_eq!(
+            client.try_get_metadata(&name),
+            Err(Ok(MuxRegistryError::ContractNotFound))
+        );
+    }
+
+    /// After other contracts are registered with metadata, an unknown name still misses.
+    #[test]
+    fn test_get_metadata_unknown_after_registrations() {
+        let (env, client, _) = setup();
+        let known = symbol_short!("known");
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Known contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+        client.register_with_metadata(&known, &version, &description, &author, &repository);
+
+        assert_eq!(
+            client.try_get_metadata(&symbol_short!("unknown")),
+            Err(Ok(MuxRegistryError::ContractNotFound))
+        );
+        assert!(client.try_get_metadata(&known).is_ok());
     }
 
     #[test]
@@ -361,7 +407,9 @@ mod tests {
 
         // One more new name must be rejected by register_with_metadata.
         let overflow = soroban_sdk::Symbol::new(&env, "ey");
-        let result = client.try_register_with_metadata(&overflow, &version, &desc, &author);
+        let repo = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+        let result =
+            client.try_register_with_metadata(&overflow, &version, &desc, &author, &repo);
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
 
@@ -390,3 +438,4 @@ mod tests {
         let result = client.try_register(&overflow, &version);
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
+}
