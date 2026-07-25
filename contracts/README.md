@@ -2,6 +2,8 @@
 
 This directory contains the smart contracts for the Mux Protocol, a comprehensive account management and permission system for Stellar.
 
+For deploying new WASM to an existing on-chain contract instance (same address), see [docs/contract-upgrade-pattern.md](../docs/contract-upgrade-pattern.md).
+
 ## Contracts
 
 ### Core Contracts

@@ -21,3 +21,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Integration test stub for `mux-wallet-registry` in `bindings/__tests__/wallet-registry.test.ts` (#320)
 - All five `MuxBatcherError` variants (`EmptyBatch`, `BatchTooLarge`, `RequiredOperationFailed`, `Unauthorized`, `ReentrancyDetected`) documented with numeric codes and HTTP mappings in `docs/error_codes.md` (#244)
 - Integration test stubs for batcher error cases (`BatchTooLarge`, `RequiredOperationFailed`, `Unauthorized`) added to `bindings/__tests__/batch-integration.test.ts` (#245)
+- Documented the Mux Soroban contract upgrade pattern in `docs/contract-upgrade-pattern.md` (TypeScript integrator notes, README links) (#468)
