@@ -27,7 +27,7 @@ On Soroban, every contract pays **rent** for the ledger entries it occupies.  Al
 | `mux-delegation` | `DelegatePerms` vec | `DataKey::DelegatePerms(owner, delegate)` | `MAX_DELEGATE_PERMS = 64` | `TooManyPermissions` |
 | `mux-permissions` | `RoleMembers` vec | `DataKey::RoleMembers(role)` | `MAX_ROLE_MEMBERS = 256` | `TooManyMembers` |
 | `mux-permissions` | `AccountRoles` vec | `DataKey::AccountRoles(account)` | `MAX_ROLES_PER_ACCOUNT = 32` | `TooManyRoles` |
-| `mux-wallet-registry` | `WalletCount` counter | `DataKey::WalletCount` | `MAX_WALLETS = 256` | `TooManyWallets` |
+| `mux-wallet-registry` | `Names` vec | `DataKey::Names` | `MAX_WALLETS = 128` | `TooManyWallets` |
 
 Caps are enforced on **new insertions only**; updates to existing entries are always allowed.
 
@@ -98,3 +98,26 @@ Run this job at least once every **25 days** to stay ahead of the 30-day TTL win
 | T-21 | Instance storage TTL expiry causes silent data loss | `extend_ttl` on every write + keeper job |
 | T-22 | Owner floods wallet registry with distinct names | `MAX_WALLETS = 256` in `register_wallet` |
 | T-23 | Owner floods session key index for an account | `MAX_SESSION_KEYS = 32` in `require_session_key_cap` |
+
+---
+
+## Test Coverage for Capacity Guards
+
+Every collection cap has dedicated unit tests that verify the `TooMany*` error path:
+
+| Contract | Test | What it verifies |
+|---|---|---|
+| `mux-account` | `test_delegate_cap_enforced` | 65th new delegate returns `TooManyDelegates` |
+| `mux-account` | `test_delegate_cap_allows_update` | Updating an existing delegate at cap succeeds |
+| `mux-delegation` | `test_too_many_delegates_rejected` | 129th delegate returns `TooManyDelegates` |
+| `mux-delegation` | `test_grant_too_many_permissions_fails` | 65th permission returns `TooManyPermissions` |
+| `mux-permissions` | `test_role_member_cap_enforced` | 257th member returns `TooManyMembers` |
+| `mux-permissions` | `test_roles_per_account_cap_enforced` | 33rd role returns `TooManyRoles` |
+| `mux-wallet-registry` | `test_register_wallet_caps_names` | 129th wallet returns `TooManyWallets` |
+| `mux-registry` | `test_too_many_contracts_via_register` | 129th name via `register()` returns `TooManyContracts` |
+| `mux-registry` | `test_too_many_contracts_via_register_with_metadata` | 129th name via `register_with_metadata()` returns `TooManyContracts` |
+| `mux-registry` | `test_register_existing_at_capacity_succeeds` | Updating existing name at cap succeeds |
+| `mux-registry` | `test_list_contracts_count_at_boundary` | `list_contracts().len() == 128` at capacity |
+| `mux-registry` | `test_get_version_after_capacity_filled` | All 128 names are queryable |
+| `mux-registry` | `test_register_cross_path_update_no_duplicate` | `register()` + `register_with_metadata()` same name = 1 entry |
+| `mux-policy` | `test_set_daily_limit_wallet_cap` | 257th wallet returns `TooManyWallets` |
