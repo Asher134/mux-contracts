@@ -24,6 +24,7 @@
     "build": "tsc",
     "lint": "eslint src --ext .ts",
     "test": "jest --passWithNoTests",
+    "local-invoke": "npx ts-node src/local-invoke.ts",
     "generate": "bash ../scripts/generate-bindings.sh",
     "generate:bindings": "npx ts-node ../scripts/generate-bindings.ts",
     "prepublishOnly": "npm run build"

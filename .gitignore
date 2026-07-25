@@ -1,5 +1,4 @@
 target/
-Cargo.lock
 **/test_snapshots/
 bindings/dist/
 bindings/node_modules/
@@ -7,8 +6,10 @@ bindings/package-lock.json
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
 *.pdb
+
+# Coverage artifacts (scripts/coverage.sh)
+coverage/
 
 # WASM
 *.wasm

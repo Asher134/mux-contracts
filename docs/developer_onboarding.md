@@ -28,6 +28,21 @@ Ensure you have the following installed:
    cargo test
    ```
 
+4. **Coverage (optional)**
+   ```bash
+   make coverage
+   # or stub-only (no instrumented test run):
+   bash scripts/coverage.sh --stub
+   bash scripts/test-coverage.sh
+   ```
+   Install `llvm-tools-preview` for HTML/LCOV output; otherwise the script prints a
+   coverage report stub listing workspace crates.
+
+## Cargo.lock
+
+Commit `Cargo.lock` with dependency changes. See [CONTRIBUTING.md](../CONTRIBUTING.md#cargolock-policy)
+for the full policy (reproducible WASM builds, CI cache keys, deny checks).
+
 ## Repository Structure
 - `contracts/`: Source code for the Mux Protocol smart contracts.
 - `docs/`: Architecture and API documentation.
