@@ -112,7 +112,14 @@ Run tests for individual contracts:
 ```bash
 cargo test --package mux-recovery
 cargo test --package mux-delegation
+cargo test --package mux-account-factory
 ```
+
+Delegation `get_delegates` enumeration and factory unauthorized-deploy paths are covered by unit tests in those crates.
+
+Release WASM must not enable `testutils` — see [docs/no-testutils-wasm.md](../docs/no-testutils-wasm.md) and `make check-no-testutils`.
+
+Event topic layout for indexers/bindings: [docs/event-topic-conventions.md](../docs/event-topic-conventions.md).
 
 Or test all contracts:
 

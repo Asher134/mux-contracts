@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `scripts/check-no-testutils.sh` (+ Makefile target) to keep `testutils` out of release WASM builds; documented in `docs/no-testutils-wasm.md`
+- Unauthorized factory deploy tests for `deploy_account` / `deploy_account_with_metadata` (no auth → no state, no events)
+- `get_delegates` enumeration tests in `mux-delegation` (empty owner, order, isolation, re-grant, middle revoke, cap)
+- Event topic conventions documented in `docs/event-topic-conventions.md` (linked from `docs/audit-events.md`)
 - Upgrade migration notes for `mux-account` in `docs/account-upgrade-migration.md` and inline module docs
 - `RegistryMeta` struct (`name`, `version`, `description`) and `DataKey::Metadata` storage key for `mux-account`
 - `set_metadata()` and `get_metadata()` contract functions on `mux-account` (owner-only write, public read)

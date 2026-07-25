@@ -571,15 +571,79 @@ mod tests {
         assert_eq!(result, Err(Ok(MuxAccountFactoryError::MetadataNotFound)));
     }
 
+    // ── Unauthorized deploy (no mock_all_auths) ───────────────────────────────
+
     #[test]
     fn test_deploy_account_unauthorized_without_auth() {
+        use soroban_sdk::testutils::Events;
+        // Deliberately omit mock_all_auths — owner.require_auth() must reject.
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxAccountFactory);
         let client = MuxAccountFactoryClient::new(&env, &contract_id);
         let owner = Address::generate(&env);
         let account_addr = Address::generate(&env);
+
         let result = client.try_deploy_account(&owner, &account_addr);
         assert!(result.is_err());
+
+        // No state mutation and no events on auth failure.
+        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert_eq!(client.account_count(), 0);
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_deploy_account_with_metadata_unauthorized_without_auth() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxAccountFactory);
+        let client = MuxAccountFactoryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Test");
+        let author = String::from_str(&env, "test");
+
+        let result = client.try_deploy_account_with_metadata(
+            &owner,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+        assert!(result.is_err());
+
+        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert_eq!(client.account_count(), 0);
+        assert!(client
+            .try_get_account_metadata(&owner, &account_addr)
+            .is_err());
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_unauthorized_deploy_does_not_affect_other_owners() {
+        // Authorized deploy for owner_a, then unauthorized attempt on a fresh env.
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let account_a = Address::generate(&env);
+        client.deploy_account(&owner_a, &account_a);
+        assert_eq!(client.account_count(), 1);
+
+        // Separate env with no mock_all_auths — auth failure must leave it empty.
+        let env_no_auth = Env::default();
+        let contract_id = env_no_auth.register_contract(None, MuxAccountFactory);
+        let client_no_auth = MuxAccountFactoryClient::new(&env_no_auth, &contract_id);
+        let owner_b = Address::generate(&env_no_auth);
+        let account_b = Address::generate(&env_no_auth);
+        let result = client_no_auth.try_deploy_account(&owner_b, &account_b);
+        assert!(result.is_err());
+        assert_eq!(client_no_auth.get_accounts(&owner_b).len(), 0);
+        assert_eq!(client_no_auth.account_count(), 0);
+
+        // Original authorized env still has owner_a's account.
+        assert_eq!(client.get_accounts(&owner_a).len(), 1);
+        assert_eq!(client.account_count(), 1);
     }
 
     #[test]

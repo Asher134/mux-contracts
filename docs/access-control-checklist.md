@@ -150,7 +150,7 @@ See [docs/storage-griefing.md](storage-griefing.md) for full details.
 - [ ] Contract IDs recorded in `bindings/src/network.ts` for the correct network.
 - [ ] `stellar contract invoke` smoke-test run against testnet deployment before mainnet.
 - [ ] Upgrade authority (if any) is a timelocked multisig — documented and reviewed.
-- [ ] No `#[cfg(test)]` code or `testutils` feature enabled in the release WASM (verify with `wasm-objdump`).
+- [ ] No `#[cfg(test)]` code or `testutils` feature enabled in the release WASM (run `make check-no-testutils` / see [no-testutils-wasm.md](no-testutils-wasm.md)).
 
 ---
 
