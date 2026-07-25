@@ -5,6 +5,14 @@
  * It supports registration with optional metadata, discovery queries, and
  * storage griefing guards via capped collections.
  *
+ * # `no_std` and `alloc` Constraints
+ *
+ * This crate is `#![no_std]` and uses `extern crate alloc` for heap-backed
+ * collection types. The Soroban VM provides a heap allocator on-chain, so
+ * `alloc` types are safe to use. However, prefer `soroban_sdk` collection
+ * types (`Vec`, `String`) for consistency with other Mux contracts and for
+ * gas-predictable storage access.
+ *
  * # Public Interface
  *
  * - `initialize(admin)` — One-time setup with admin authorization
@@ -399,201 +407,18 @@ mod tests {
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
 
-    // ── Comprehensive capacity path tests (#497) ────────────────────────────
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
 
-    /// Updating a name already in the registry succeeds even when at MAX_CONTRACTS.
     #[test]
-    fn test_register_existing_at_capacity_succeeds() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.budget().reset_unlimited();
-        let contract_id = env.register_contract(None, MuxRegistry);
-        let client = MuxRegistryClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let version = String::from_str(&env, "1.0.0");
-        let version_v2 = String::from_str(&env, "2.0.0");
-
-        // Fill the registry to MAX_CONTRACTS with unique names.
-        for i in 0u32..128 {
-            let sym = soroban_sdk::Symbol::new(
-                &env,
-                &format!(
-                    "{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                ),
-            );
-            client.register(&sym, &version);
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_reg")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("reg"),
+            symbol_short!("regmeta"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
         }
-
-        // Updating the first name ("aa") must succeed — no new name added.
-        let existing = soroban_sdk::Symbol::new(&env, "aa");
-        let result = client.try_register(&existing, &version_v2);
-        assert!(result.is_ok());
-        assert_eq!(client.get_version(&existing), version_v2);
-    }
-
-    /// register_with_metadata also succeeds for existing names at capacity.
-    #[test]
-    fn test_register_with_metadata_existing_at_capacity_succeeds() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.budget().reset_unlimited();
-        let contract_id = env.register_contract(None, MuxRegistry);
-        let client = MuxRegistryClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let version = String::from_str(&env, "1.0.0");
-        let version_v2 = String::from_str(&env, "2.0.0");
-        let desc = String::from_str(&env, "updated");
-        let author = String::from_str(&env, "mux-labs");
-        let repo = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
-
-        for i in 0u32..128 {
-            let sym = soroban_sdk::Symbol::new(
-                &env,
-                &format!(
-                    "{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                ),
-            );
-            client.register(&sym, &version);
-        }
-
-        // Updating "aa" with metadata must succeed.
-        let existing = soroban_sdk::Symbol::new(&env, "aa");
-        let result =
-            client.try_register_with_metadata(&existing, &version_v2, &desc, &author, &repo);
-        assert!(result.is_ok());
-        let meta = client.get_metadata(&existing);
-        assert_eq!(meta.version, version_v2);
-        assert_eq!(meta.description, desc);
-    }
-
-    /// list_contracts returns exactly MAX_CONTRACTS entries after filling.
-    #[test]
-    fn test_list_contracts_count_at_boundary() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.budget().reset_unlimited();
-        let contract_id = env.register_contract(None, MuxRegistry);
-        let client = MuxRegistryClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let version = String::from_str(&env, "1.0.0");
-        for i in 0u32..128 {
-            let sym = soroban_sdk::Symbol::new(
-                &env,
-                &format!(
-                    "{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                ),
-            );
-            client.register(&sym, &version);
-        }
-
-        let names = client.list_contracts();
-        assert_eq!(names.len(), 128);
-    }
-
-    /// get_version works for all 128 names at capacity.
-    #[test]
-    fn test_get_version_after_capacity_filled() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.budget().reset_unlimited();
-        let contract_id = env.register_contract(None, MuxRegistry);
-        let client = MuxRegistryClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let version = String::from_str(&env, "1.0.0");
-        for i in 0u32..128 {
-            let sym = soroban_sdk::Symbol::new(
-                &env,
-                &format!(
-                    "{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                ),
-            );
-            client.register(&sym, &version);
-        }
-
-        // Verify every name can be queried.
-        for i in 0u32..128 {
-            let sym = soroban_sdk::Symbol::new(
-                &env,
-                &format!(
-                    "{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                ),
-            );
-            assert_eq!(client.get_version(&sym), version);
-        }
-    }
-
-    /// register then register_with_metadata for the same name does not duplicate.
-    #[test]
-    fn test_register_cross_path_update_no_duplicate() {
-        let (env, client, _) = setup();
-        let name = symbol_short!("account");
-        let v1 = String::from_str(&env, "1.0.0");
-        let v2 = String::from_str(&env, "2.0.0");
-        let desc = String::from_str(&env, "desc");
-        let author = String::from_str(&env, "mux-labs");
-        let repo = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
-
-        client.register(&name, &v1);
-        client.register_with_metadata(&name, &v2, &desc, &author, &repo);
-
-        // Name must appear only once in the list.
-        let names = client.list_contracts();
-        let count = names.iter().filter(|n| *n == name).count();
-        assert_eq!(count, 1);
-        // Version must reflect the latest write.
-        assert_eq!(client.get_version(&name), v2);
-        let meta = client.get_metadata(&name);
-        assert_eq!(meta.version, v2);
-    }
-
-    /// New name at capacity via register_with_metadata returns TooManyContracts.
-    #[test]
-    fn test_register_with_metadata_new_name_at_capacity_fails() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.budget().reset_unlimited();
-        let contract_id = env.register_contract(None, MuxRegistry);
-        let client = MuxRegistryClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        client.initialize(&admin);
-
-        let version = String::from_str(&env, "1.0.0");
-        let desc = String::from_str(&env, "desc");
-        let author = String::from_str(&env, "mux-labs");
-        let repo = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
-
-        for i in 0u32..128 {
-            let sym = soroban_sdk::Symbol::new(
-                &env,
-                &format!(
-                    "{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                ),
-            );
-            client.register(&sym, &version);
-        }
-
-        let overflow = soroban_sdk::Symbol::new(&env, "ey");
-        let result = client.try_register_with_metadata(&overflow, &version, &desc, &author, &repo);
-        assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
 }

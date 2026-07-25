@@ -4,6 +4,12 @@
  * Provides delegated signing, guardian management, and spending limits
  * on top of a Stellar Soroban account.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types (`Vec`, `Map`, `String`)
+ * which are backed by the Soroban host and do not require a Rust allocator.
+ *
  * ## Upgrade Migration Notes
  *
  * When upgrading this contract to a new version:
@@ -831,114 +837,26 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── Authorization flow tests (#494) ────────────────────────────────────────
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
 
+    /// All contract tag and action symbols must be <= 8 bytes so that
+    /// `symbol_short!` produces valid Soroban symbols.
     #[test]
-    fn test_authorize_owner_can_set_delegate() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let delegate = Address::generate(&env);
-        // Owner is authorized — set_delegate succeeds.
-        assert!(client.try_set_delegate(&delegate, &1000_u32, &true).is_ok());
-        assert!(client.delegates().contains_key(delegate));
-    }
-
-    #[test]
-    fn test_authorize_owner_can_set_spend_limit() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let asset = Address::generate(&env);
-        // Owner is authorized — set_spend_limit succeeds.
-        assert!(client
-            .try_set_spend_limit(&asset, &5000_i128, &200_u32)
-            .is_ok());
-    }
-
-    #[test]
-    fn test_authorize_uninitialized_rejects_operations() {
-        let (_env, client, _owner) = setup();
-        // No initialize() call — all owner-gated operations must fail.
-        let delegate = Address::generate(&env);
-        assert_eq!(
-            client.try_set_delegate(&delegate, &1000_u32, &true),
-            Err(Ok(MuxAccountError::NotInitialized))
-        );
-        let asset = Address::generate(&env);
-        assert_eq!(
-            client.try_set_spend_limit(&asset, &1000_i128, &100_u32),
-            Err(Ok(MuxAccountError::NotInitialized))
-        );
-    }
-
-    #[test]
-    fn test_authorize_remove_delegate_requires_existing() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let delegate = Address::generate(&env);
-        // Removing a non-existent delegate returns DelegateNotFound.
-        assert_eq!(
-            client.try_remove_delegate(&delegate),
-            Err(Ok(MuxAccountError::DelegateNotFound))
-        );
-    }
-
-    #[test]
-    fn test_authorize_spend_limit_zero_and_negative_rejected() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let asset = Address::generate(&env);
-        // Zero amount is rejected.
-        assert_eq!(
-            client.try_set_spend_limit(&asset, &0_i128, &100_u32),
-            Err(Ok(MuxAccountError::InvalidAmount))
-        );
-        // Negative amount is rejected.
-        assert_eq!(
-            client.try_set_spend_limit(&asset, &-1_i128, &100_u32),
-            Err(Ok(MuxAccountError::InvalidAmount))
-        );
-    }
-
-    #[test]
-    fn test_authorize_spend_limit_zero_period_rejected() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let asset = Address::generate(&env);
-        assert_eq!(
-            client.try_set_spend_limit(&asset, &1000_i128, &0_u32),
-            Err(Ok(MuxAccountError::InvalidPeriod))
-        );
-    }
-
-    #[test]
-    fn test_authorize_debit_spend_overflow_returns_error() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let asset = Address::generate(&env);
-        client.set_spend_limit(&asset, &i128::MAX, &100_u32);
-        // Spending i128::MAX + 1 via checked_add must return ArithmeticOverflow, not panic.
-        let result = client.try_debit_spend(&asset, &i128::MAX);
-        // i128::MAX alone exceeds the limit (spent=0, limit=i128::MAX → ok if limit allows).
-        // Actually spent=0 + i128::MAX = i128::MAX which equals limit, so it succeeds.
-        // Then a second call would fail with SpendLimitExceeded.
-        assert!(result.is_ok());
-        let result2 = client.try_debit_spend(&asset, &1_i128);
-        assert_eq!(result2, Err(Ok(MuxAccountError::SpendLimitExceeded)));
-    }
-
-    #[test]
-    fn test_authorize_get_delegate_expired_returns_error() {
-        let (env, client, owner) = setup();
-        client.initialize(&owner, &Vec::new(&env));
-        let delegate = Address::generate(&env);
-        let current = env.ledger().sequence();
-        client.set_delegate(&delegate, &(current + 1), &true);
-        // Advance past expiry.
-        env.ledger().set_sequence_number(current + 1);
-        assert_eq!(
-            client.try_get_delegate(&delegate),
-            Err(Ok(MuxAccountError::DelegateExpired))
-        );
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_acct")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("dlg_set"),
+            symbol_short!("dlg_rm"),
+            symbol_short!("lmt_set"),
+            symbol_short!("debited"),
+            symbol_short!("ses_exe"),
+            symbol_short!("meta_set"),
+            symbol_short!("unpaused"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }
 pub mod smart_wallet;

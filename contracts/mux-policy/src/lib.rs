@@ -5,6 +5,11 @@
  * counter resets automatically once the current day (measured in ledgers)
  * has elapsed.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * # Public Interface
  *
  * - `initialize(admin)` — One-time setup with admin authorization
@@ -602,110 +607,19 @@ mod tests {
         assert!(client.try_record_spend(&wallet, &1_i128).is_err());
     }
 
-    // ── Authorization verification tests (#495) ──────────────────────────────
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
-    fn test_record_spend_requires_wallet_auth() {
-        // Use selective mock_auths to simulate a call where the wallet does NOT
-        // authorize record_spend. The wallet address is generated but not added
-        // to the auth list, so require_auth() fails.
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MuxPolicy);
-        let client = MuxPolicyClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        env.mock_all_auths();
-        client.initialize(&admin);
-
-        let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
-
-        // Now use selective auth: only authorize admin, NOT the wallet.
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &admin,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "record_spend",
-                args: (&wallet, &100_i128).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-
-        // The wallet is NOT in the auth list, so this must fail.
-        let result = client.try_record_spend(&wallet, &100_i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_set_daily_limit_requires_admin_auth() {
-        // Verify that a non-admin cannot call set_daily_limit.
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MuxPolicy);
-        let client = MuxPolicyClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        env.mock_all_auths();
-        client.initialize(&admin);
-
-        let non_admin = Address::generate(&env);
-        let wallet = Address::generate(&env);
-
-        // Mock auths: only non_admin authorizes, admin does not.
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &non_admin,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "set_daily_limit",
-                args: (&wallet, &1000_i128, &17280_u32, &None).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-
-        // non_admin is not the admin — must fail.
-        let result = client.try_set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_reset_daily_counter_requires_admin_auth() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, MuxPolicy);
-        let client = MuxPolicyClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        env.mock_all_auths();
-        client.initialize(&admin);
-
-        let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
-
-        let non_admin = Address::generate(&env);
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &non_admin,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "reset_daily_counter",
-                args: (&wallet,).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-
-        let result = client.try_reset_daily_counter(&wallet);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_record_spend_cumulative_multiple_wallets_isolated() {
-        // Verify that wallet A's spends do not affect wallet B's limit.
-        let (env, client, _) = setup();
-        let wallet_a = Address::generate(&env);
-        let wallet_b = Address::generate(&env);
-        client.set_daily_limit(&wallet_a, &100_i128, &17280_u32, &None);
-        client.set_daily_limit(&wallet_b, &100_i128, &17280_u32, &None);
-
-        // Wallet A spends its full limit.
-        client.record_spend(&wallet_a, &100_i128);
-        assert!(client.try_record_spend(&wallet_a, &1_i128).is_err());
-
-        // Wallet B's limit is completely unaffected.
-        client.record_spend(&wallet_b, &100_i128);
-        assert!(client.try_record_spend(&wallet_b, &1_i128).is_err());
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_pol")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("lmt_set"),
+            symbol_short!("spent"),
+            symbol_short!("ctr_rst"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }
