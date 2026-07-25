@@ -385,6 +385,17 @@ safe-harbor guidelines.
 To report a vulnerability, open a private security advisory on GitHub or email
 **security@mux-protocol.xyz**.
 
+## Testing & coverage
+
+```bash
+cargo test --workspace --all-features
+make coverage                          # LLVM coverage, or stub if tools missing
+bash scripts/coverage.sh --stub        # print coverage report stub only
+bash scripts/test-coverage.sh          # validate stub lists all mux-* crates
+```
+
+`Cargo.lock` is committed — see [CONTRIBUTING.md](CONTRIBUTING.md#cargolock-policy).
+
 ## Contributing
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — commit conventions, PR process, contract PR guidelines

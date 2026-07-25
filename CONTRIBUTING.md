@@ -206,7 +206,26 @@ Before requesting review on a contract PR:
 - **Unit Tests** — Run `cargo test --lib`
 - **All Tests** — Run `cargo test --workspace --all-features`
 - **Integration Tests** — Require localnet setup (see README.md)
-- **Coverage** — Aim for >90% coverage on new code
+- **Coverage** — Aim for >90% coverage on new code. Generate a report with
+  `make coverage` or `bash scripts/coverage.sh` (add `--html` / `--lcov` as needed).
+  If `llvm-tools-preview` is not installed, the script prints a **coverage report stub**
+  listing workspace crates; validate the stub with `bash scripts/test-coverage.sh`.
+
+## Cargo.lock Policy
+
+This repository **commits `Cargo.lock`** and keeps it under version control.
+
+- **Why** — Soroban WASM builds must be reproducible for audits, CI cache keys, and
+  mainnet deploy checklists (`docs/MAINNET_DEPLOY_CHECKLIST.md`). Pinning transitive
+  crates via the lockfile reduces supply-chain drift between developers and CI.
+- **Do** — Commit lockfile updates in the same PR that bumps dependencies in
+  `Cargo.toml` / workspace members. Run `cargo update -p <crate>` (or a full
+  `cargo update` when intentional) and include the resulting `Cargo.lock` diff.
+- **Do not** — Add `Cargo.lock` to `.gitignore`, delete it from the tree, or regenerate
+  it casually without reviewing the diff (`cargo deny check` is recommended after
+  dependency changes).
+- **CI** — Workflows hash `Cargo.lock` for cache keys; keep the committed file in sync
+  with what CI builds.
 
 Example test:
 ```rust

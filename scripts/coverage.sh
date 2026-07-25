@@ -15,6 +15,7 @@
 #   --html     Generate an HTML report (requires llvm-tools-preview + grcov or llvm-cov)
 #   --open     Open the HTML report in the default browser after generation
 #   --lcov     Export LCOV data to coverage/lcov.info (for CI upload)
+#   --stub     Print the coverage report stub only (no tests; for script checks)
 #   --help     Show this help
 #
 # Output:
@@ -51,22 +52,57 @@ log_success() { echo -e "${GREEN}✓${NC} $*"; }
 log_warning() { echo -e "${YELLOW}⚠️  ${NC}$*"; }
 log_error()   { echo -e "${RED}✗${NC} $*" >&2; }
 
+# Stub shown when llvm-tools-preview is missing (also via --stub for checks).
+print_coverage_stub() {
+  echo ""
+  log_warning "Coverage summary not available (llvm tools not installed)."
+  log_warning "Install llvm-tools-preview to get per-file coverage data:"
+  log_warning "  rustup component add llvm-tools-preview"
+  echo ""
+  echo "  ┌──────────────────────────────────────────────────────────────┐"
+  echo "  │  COVERAGE REPORT STUB — install llvm-tools-preview to view  │"
+  echo "  │                                                              │"
+  echo "  │  Workspace crates instrumented:                              │"
+  echo "  │    • mux-account                                             │"
+  echo "  │    • mux-account-factory                                     │"
+  echo "  │    • mux-batcher                                             │"
+  echo "  │    • mux-delegation                                          │"
+  echo "  │    • mux-permissions                                         │"
+  echo "  │    • mux-policy                                              │"
+  echo "  │    • mux-recovery                                            │"
+  echo "  │    • mux-registry                                            │"
+  echo "  │    • mux-spending-policy                                     │"
+  echo "  │    • mux-wallet-registry                                     │"
+  echo "  │                                                              │"
+  echo "  │  Run:  bash scripts/coverage.sh --html --open               │"
+  echo "  │  CI:   bash scripts/coverage.sh --lcov                      │"
+  echo "  │  Make: make coverage                                         │"
+  echo "  └──────────────────────────────────────────────────────────────┘"
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 WANT_HTML=false
 WANT_OPEN=false
 WANT_LCOV=false
+STUB_ONLY=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --html)   WANT_HTML=true;  shift ;;
     --open)   WANT_OPEN=true;  shift ;;
     --lcov)   WANT_LCOV=true;  shift ;;
+    --stub)   STUB_ONLY=true;  shift ;;
     --help|-h)
-      grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -35
+      grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -40
       exit 0 ;;
     *) log_error "Unknown argument: $1"; exit 1 ;;
   esac
 done
+
+if [[ "$STUB_ONLY" == "true" ]]; then
+  print_coverage_stub
+  exit 0
+fi
 
 # ── Detect LLVM tools from rustup ─────────────────────────────────────────────
 TOOLCHAIN_DIR="$(rustup toolchain list -v | grep '(default)' | awk '{print $NF}' || true)"
@@ -191,24 +227,9 @@ if [[ -f "$LLVM_COV" ]] && [[ -f "$PROFDATA_FILE" ]] && [[ -n "$OBJECT_FLAGS" ]]
 
   log_success "Coverage report complete."
 else
-  # Stub output when llvm tools are unavailable
-  echo ""
-  log_warning "Coverage summary not available (llvm tools not installed)."
-  log_warning "Install llvm-tools-preview to get per-file coverage data:"
-  log_warning "  rustup component add llvm-tools-preview"
-  echo ""
-  echo "  ┌──────────────────────────────────────────────────────────────┐"
-  echo "  │  COVERAGE REPORT STUB — install llvm-tools-preview to view  │"
-  echo "  │                                                              │"
-  echo "  │  Contracts instrumented:                                     │"
-  echo "  │    • mux-account                                             │"
-  echo "  │    • mux-account-factory                                     │"
-  echo "  │    • mux-batcher                                             │"
-  echo "  │    • mux-permissions                                         │"
-  echo "  │                                                              │"
-  echo "  │  Run:  bash scripts/coverage.sh --html --open               │"
-  echo "  │  CI:   bash scripts/coverage.sh --lcov                      │"
-  echo "  └──────────────────────────────────────────────────────────────┘"
+  # Stub output when llvm tools are unavailable.
+  # Keeps local/CI coverage runs useful without llvm-tools-preview installed.
+  print_coverage_stub
 fi
 
 # Cleanup profraw files (keep profdata and lcov)
