@@ -355,6 +355,117 @@ mod tests {
         assert_eq!(client.get_delegates(&owner).len(), 0);
     }
 
+    // ── get_delegates enumeration ─────────────────────────────────────────────
+
+    #[test]
+    fn test_get_delegates_empty_for_unknown_owner() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegates = client.get_delegates(&owner);
+        assert_eq!(delegates.len(), 0);
+    }
+
+    #[test]
+    fn test_get_delegates_preserves_grant_order() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let d0 = Address::generate(&env);
+        let d1 = Address::generate(&env);
+        let d2 = Address::generate(&env);
+        let perms = vec![&env, symbol_short!("read")];
+
+        client.grant_delegate(&owner, &d0, &perms);
+        client.grant_delegate(&owner, &d1, &perms);
+        client.grant_delegate(&owner, &d2, &perms);
+
+        let delegates = client.get_delegates(&owner);
+        assert_eq!(delegates.len(), 3);
+        assert_eq!(delegates.get(0).unwrap(), d0);
+        assert_eq!(delegates.get(1).unwrap(), d1);
+        assert_eq!(delegates.get(2).unwrap(), d2);
+    }
+
+    #[test]
+    fn test_get_delegates_isolated_per_owner() {
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        let delegate_a = Address::generate(&env);
+        let delegate_b = Address::generate(&env);
+        let perms = vec![&env, symbol_short!("read")];
+
+        client.grant_delegate(&owner_a, &delegate_a, &perms);
+        client.grant_delegate(&owner_b, &delegate_b, &perms);
+
+        let list_a = client.get_delegates(&owner_a);
+        let list_b = client.get_delegates(&owner_b);
+        assert_eq!(list_a.len(), 1);
+        assert_eq!(list_b.len(), 1);
+        assert_eq!(list_a.get(0).unwrap(), delegate_a);
+        assert_eq!(list_b.get(0).unwrap(), delegate_b);
+        assert!(!list_a.contains(&delegate_b));
+        assert!(!list_b.contains(&delegate_a));
+    }
+
+    #[test]
+    fn test_get_delegates_regrant_does_not_duplicate() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perm_a = symbol_short!("read");
+        let perm_b = symbol_short!("write");
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm_a]);
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm_b]);
+
+        let delegates = client.get_delegates(&owner);
+        assert_eq!(delegates.len(), 1);
+        assert_eq!(delegates.get(0).unwrap(), delegate);
+    }
+
+    #[test]
+    fn test_get_delegates_after_middle_revoke() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let d0 = Address::generate(&env);
+        let d1 = Address::generate(&env);
+        let d2 = Address::generate(&env);
+        let perms = vec![&env, symbol_short!("read")];
+
+        client.grant_delegate(&owner, &d0, &perms);
+        client.grant_delegate(&owner, &d1, &perms);
+        client.grant_delegate(&owner, &d2, &perms);
+
+        client.revoke_delegate(&owner, &d1);
+
+        let delegates = client.get_delegates(&owner);
+        assert_eq!(delegates.len(), 2);
+        assert!(delegates.contains(&d0));
+        assert!(!delegates.contains(&d1));
+        assert!(delegates.contains(&d2));
+    }
+
+    #[test]
+    fn test_get_delegates_enumerates_up_to_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        let perms = vec![&env, symbol_short!("read")];
+        let mut expected: Vec<Address> = Vec::new(&env);
+
+        for _ in 0..MAX_DELEGATES_PER_OWNER {
+            let d = Address::generate(&env);
+            client.grant_delegate(&owner, &d, &perms);
+            expected.push_back(d);
+        }
+
+        let delegates = client.get_delegates(&owner);
+        assert_eq!(delegates.len(), MAX_DELEGATES_PER_OWNER);
+        for i in 0..MAX_DELEGATES_PER_OWNER {
+            assert_eq!(delegates.get(i).unwrap(), expected.get(i).unwrap());
+        }
+    }
+
     #[test]
     fn test_grant_overwrites_prior_permissions() {
         let (env, client) = setup();

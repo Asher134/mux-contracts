@@ -3,6 +3,9 @@
 **Version:** 0.1.0  
 **Status:** Living document — update whenever a new event is added or an existing one changes.
 
+> **Conventions:** Topic layout, naming rules, and TypeScript filter notes are defined in
+> [event-topic-conventions.md](event-topic-conventions.md). This file is the per-contract catalog.
+
 ---
 
 ## Overview
@@ -20,6 +23,8 @@ topics[1]  action        Symbol  e.g. "init", "dlg_set", "role_grt"
 ```
 
 The `data` field carries action-specific payload encoded as a Soroban `Val`.
+
+See [event-topic-conventions.md](event-topic-conventions.md) for naming rules, the full tag table, and RPC filter examples.
 
 ---
 
