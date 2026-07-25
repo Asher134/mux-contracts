@@ -362,7 +362,11 @@ mod tests {
         for i in 0u32..128 {
             let sym = soroban_sdk::Symbol::new(
                 &env,
-                &format!("{}{}", (b'a' + (i / 26) as u8) as char, (b'a' + (i % 26) as u8) as char),
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
             );
             client.register(&sym, &version);
         }
@@ -389,7 +393,11 @@ mod tests {
         for i in 0u32..128 {
             let sym = soroban_sdk::Symbol::new(
                 &env,
-                &format!("{}{}", (b'a' + (i / 26) as u8) as char, (b'a' + (i % 26) as u8) as char),
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
             );
             client.register(&sym, &version);
         }

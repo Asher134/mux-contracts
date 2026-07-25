@@ -58,8 +58,10 @@ fn emit(
 pub enum DataKey {
     Admin,
     /// Per-wallet daily spend limit record.
-    WalletLimit(Address),    /// List of all wallets with configured limits (for griefing guard).
-    WalletNames,}
+    WalletLimit(Address),
+    /// List of all wallets with configured limits (for griefing guard).
+    WalletNames,
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -119,9 +121,10 @@ impl MuxPolicy {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::WalletNames, &soroban_sdk::Vec::<Address>::new(&env));
+        env.storage().instance().set(
+            &DataKey::WalletNames,
+            &soroban_sdk::Vec::<Address>::new(&env),
+        );
         emit(&env, symbol_short!("init"), admin);
         Self::extend_ttl(&env);
         Ok(())
@@ -172,7 +175,9 @@ impl MuxPolicy {
                 return Err(MuxPolicyError::TooManyWallets);
             }
             wallet_names.push_back(wallet.clone());
-            env.storage().instance().set(&DataKey::WalletNames, &wallet_names);
+            env.storage()
+                .instance()
+                .set(&DataKey::WalletNames, &wallet_names);
         }
 
         let record = DailyLimit {
