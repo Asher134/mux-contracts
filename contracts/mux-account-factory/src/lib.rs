@@ -69,7 +69,11 @@ pub enum MuxAccountFactoryError {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Maximum accounts per owner to bound the Accounts vec in instance storage.
-const MAX_ACCOUNTS_PER_OWNER: u32 = 64;
+///
+/// Enforced on every deploy path (`deploy_account`, `deploy_account_with_metadata`)
+/// and mirrored by the dry-run helpers (`simulate_deploy*`). Exposed via
+/// [`MuxAccountFactoryClient::max_accounts_per_owner`] for TypeScript clients.
+pub const MAX_ACCOUNTS_PER_OWNER: u32 = 64;
 
 // STORAGE-GRIEFING: bound metadata string sizes to prevent owners from bloating
 // instance storage with large strings. Each account can have metadata, so with
@@ -97,6 +101,9 @@ impl MuxAccountFactory {
     ///
     /// The caller must be the owner. `account_address` must differ from `owner`
     /// and must not already be registered for this owner.
+    ///
+    /// Returns [`MuxAccountFactoryError::TooManyAccounts`] when the owner's
+    /// `Accounts` vec already holds [`MAX_ACCOUNTS_PER_OWNER`] entries.
     pub fn deploy_account(
         env: Env,
         owner: Address,
@@ -108,16 +115,8 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
 
-        let mut accounts: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Accounts(owner.clone()))
-            .unwrap_or_else(|| Vec::new(&env));
-
-        // STORAGE-GRIEFING: cap per-owner account list.
-        if accounts.len() >= MAX_ACCOUNTS_PER_OWNER {
-            return Err(MuxAccountFactoryError::TooManyAccounts);
-        }
+        // STORAGE-GRIEFING: bound Accounts vec growth on deploy.
+        let mut accounts = Self::load_accounts_under_cap(&env, &owner)?;
 
         accounts.push_back(account_address.clone());
         env.storage()
@@ -162,6 +161,9 @@ impl MuxAccountFactory {
     ///
     /// The caller must be the owner. `account_address` must differ from `owner`
     /// and must not already be registered for this owner.
+    ///
+    /// Returns [`MuxAccountFactoryError::TooManyAccounts`] when the owner's
+    /// `Accounts` vec already holds [`MAX_ACCOUNTS_PER_OWNER`] entries.
     pub fn deploy_account_with_metadata(
         env: Env,
         owner: Address,
@@ -176,25 +178,17 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
 
-        let mut accounts: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Accounts(owner.clone()))
-            .unwrap_or_else(|| Vec::new(&env));
-
-        // STORAGE-GRIEFING: cap per-owner account list.
-        if accounts.len() >= MAX_ACCOUNTS_PER_OWNER {
-            return Err(MuxAccountFactoryError::TooManyAccounts);
-        }
+        // STORAGE-GRIEFING: bound Accounts vec growth on deploy.
+        let mut accounts = Self::load_accounts_under_cap(&env, &owner)?;
 
         // STORAGE-GRIEFING: validate metadata string sizes to prevent storage bloat.
-        if version.len() > MAX_VERSION_LENGTH as u32 {
+        if version.len() > MAX_VERSION_LENGTH {
             return Err(MuxAccountFactoryError::MetadataTooLarge);
         }
-        if description.len() > MAX_DESCRIPTION_LENGTH as u32 {
+        if description.len() > MAX_DESCRIPTION_LENGTH {
             return Err(MuxAccountFactoryError::MetadataTooLarge);
         }
-        if author.len() > MAX_AUTHOR_LENGTH as u32 {
+        if author.len() > MAX_AUTHOR_LENGTH {
             return Err(MuxAccountFactoryError::MetadataTooLarge);
         }
 
@@ -251,36 +245,76 @@ impl MuxAccountFactory {
     /// Validate a deploy_account call without writing any state (dry-run).
     ///
     /// Returns the account address that *would* be registered, or the same
-    /// error that `deploy_account` would return.  No storage is modified and
-    /// no events are emitted.
+    /// error that `deploy_account` would return — including
+    /// [`MuxAccountFactoryError::TooManyAccounts`] when the owner's Accounts
+    /// vec is already at [`MAX_ACCOUNTS_PER_OWNER`].  No storage is modified
+    /// and no events are emitted.
     pub fn simulate_deploy(
-        _env: Env,
+        env: Env,
         owner: Address,
         account_address: Address,
     ) -> Result<Address, MuxAccountFactoryError> {
         if account_address == owner {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
+        // Mirror the deploy-path Accounts bound so dry-run stays auditable.
+        let _ = Self::load_accounts_under_cap(&env, &owner)?;
         Ok(account_address)
     }
 
     /// Validate a deploy_account_with_metadata call without writing any state
     /// (dry-run).  No storage is modified and no events are emitted.
+    ///
+    /// Enforces the same Accounts vec bound as
+    /// [`Self::deploy_account_with_metadata`].
     pub fn simulate_deploy_with_metadata(
-        _env: Env,
+        env: Env,
         owner: Address,
         account_address: Address,
-        _version: String,
-        _description: String,
-        _author: String,
+        version: String,
+        description: String,
+        author: String,
     ) -> Result<Address, MuxAccountFactoryError> {
         if account_address == owner {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
+        let _ = Self::load_accounts_under_cap(&env, &owner)?;
+        if version.len() > MAX_VERSION_LENGTH
+            || description.len() > MAX_DESCRIPTION_LENGTH
+            || author.len() > MAX_AUTHOR_LENGTH
+        {
+            return Err(MuxAccountFactoryError::MetadataTooLarge);
+        }
         Ok(account_address)
     }
 
+    /// Return the maximum number of accounts permitted per owner.
+    ///
+    /// Callers (including TypeScript bindings) can query this before deploy to
+    /// avoid a `TooManyAccounts` error at execution time.
+    pub fn max_accounts_per_owner(_env: Env) -> u32 {
+        MAX_ACCOUNTS_PER_OWNER
+    }
+
     // ── Private helpers ────────────────────────────────────────────────────────
+
+    /// Load the owner's Accounts vec, rejecting when it is already at the
+    /// storage-griefing cap. Shared by deploy and simulate paths.
+    fn load_accounts_under_cap(
+        env: &Env,
+        owner: &Address,
+    ) -> Result<Vec<Address>, MuxAccountFactoryError> {
+        let accounts: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Accounts(owner.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+
+        if accounts.len() >= MAX_ACCOUNTS_PER_OWNER {
+            return Err(MuxAccountFactoryError::TooManyAccounts);
+        }
+        Ok(accounts)
+    }
 
     fn extend_ttl(env: &Env) {
         env.storage()
@@ -359,14 +393,19 @@ mod tests {
 
     #[test]
     fn test_accounts_cap_enforced() {
+        use soroban_test_helpers::{assert_contract_err, assert_len_at_most};
+
         let (env, client) = setup();
         env.budget().reset_unlimited();
         let owner = Address::generate(&env);
         for _ in 0..64 {
             client.deploy_account(&owner, &Address::generate(&env));
         }
-        let result = client.try_deploy_account(&owner, &Address::generate(&env));
-        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+        assert_contract_err(
+            client.try_deploy_account(&owner, &Address::generate(&env)),
+            MuxAccountFactoryError::TooManyAccounts,
+        );
+        assert_len_at_most(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER, "accounts");
     }
 
     #[test]
@@ -785,5 +824,64 @@ mod tests {
         client.simulate_deploy_with_metadata(&owner, &account_addr, &version, &description, &author);
         assert_eq!(client.get_accounts(&owner).len(), 0);
         assert_eq!(client.account_count(), 0);
+    }
+
+    #[test]
+    fn test_simulate_deploy_enforces_accounts_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        let result = client.try_simulate_deploy(&owner, &Address::generate(&env));
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+        // Dry-run must not mutate state even on the error path.
+        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
+    }
+
+    #[test]
+    fn test_simulate_deploy_with_metadata_enforces_accounts_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Test");
+        let author = String::from_str(&env, "test");
+        let result = client.try_simulate_deploy_with_metadata(
+            &owner,
+            &Address::generate(&env),
+            &version,
+            &description,
+            &author,
+        );
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+    }
+
+    #[test]
+    fn test_max_accounts_per_owner_matches_constant() {
+        let (_, client) = setup();
+        assert_eq!(client.max_accounts_per_owner(), MAX_ACCOUNTS_PER_OWNER);
+        assert_eq!(MAX_ACCOUNTS_PER_OWNER, 64);
+    }
+
+    #[test]
+    fn test_accounts_vec_bounded_after_deploy_to_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
+        assert_eq!(
+            client.try_deploy_account(&owner, &Address::generate(&env)),
+            Err(Ok(MuxAccountFactoryError::TooManyAccounts))
+        );
+        // Storage growth stays capped — length must not increase on rejection.
+        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
     }
 }
