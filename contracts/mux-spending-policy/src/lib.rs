@@ -146,6 +146,9 @@ impl MuxSpendingPolicy {
     /// Returns `Ok(())` when the spend is allowed, `Err(SpendLimitExceeded)`
     /// when the spend exceeds the configured limit, `Err(PolicyNotFound)` when
     /// no policy is configured, and `Err(InvalidInput)` for negative amounts.
+    ///
+    /// Emits `chk_ok` when the spend is within the limit or `chk_ex` when the
+    /// spend exceeds the configured limit (or policy is not found).
     pub fn check_spend(
         env: Env,
         account: Address,
@@ -158,14 +161,25 @@ impl MuxSpendingPolicy {
         if amount < 0 {
             return Err(SpendingPolicyError::InvalidInput);
         }
-        let policy: SpendLimit = env
-            .storage()
-            .instance()
-            .get(&DataKey::SpendLimit(account, asset))
-            .ok_or(SpendingPolicyError::PolicyNotFound)?;
+        let key = DataKey::SpendLimit(account.clone(), asset.clone());
+        if !env.storage().instance().has(&key) {
+            emit(
+                &env,
+                symbol_short!("chk_ex"),
+                (account, asset, amount, symbol_short!("no_pol")),
+            );
+            return Err(SpendingPolicyError::PolicyNotFound);
+        }
+        let policy: SpendLimit = env.storage().instance().get(&key).unwrap();
         if amount > policy.limit {
+            emit(
+                &env,
+                symbol_short!("chk_ex"),
+                (account, asset, amount, policy.limit),
+            );
             return Err(SpendingPolicyError::SpendLimitExceeded);
         }
+        emit(&env, symbol_short!("chk_ok"), (account, asset, amount));
         Ok(())
     }
 
@@ -703,7 +717,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_spend_does_not_emit_event() {
+    fn test_check_spend_emits_chk_ok_event_on_success() {
         use soroban_sdk::testutils::Events;
 
         let (env, client, _) = setup();
