@@ -10,9 +10,10 @@
  *
  * ## Audit Events
  *
- * This contract emits the following events:
- * - `initialize`: Emitted when the contract is initialized with an admin address.
+ * This contract emits the following events (tag: `mux_spend`):
+ * - `init`: Emitted when the contract is initialized with an admin address.
  * - `lmt_set`: Emitted when a spending limit policy is created or updated.
+ * - `chk_ok`: Emitted when `check_spend` passes — records the allowed spend for auditability.
  *
  * Events can be queried via the Soroban RPC `getEvents` endpoint with contract ID filter.
  */
@@ -96,6 +97,7 @@ impl MuxSpendingPolicy {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         emit(&env, symbol_short!("init"), admin);
+        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -118,6 +120,7 @@ impl MuxSpendingPolicy {
             .instance()
             .set(&DataKey::SpendLimit(account.clone(), asset.clone()), &policy);
         emit(&env, symbol_short!("lmt_set"), (account, asset, limit));
+        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -138,6 +141,8 @@ impl MuxSpendingPolicy {
     /// Returns `Ok(())` when the spend is allowed, `Err(SpendLimitExceeded)`
     /// when the spend exceeds the configured limit, `Err(PolicyNotFound)` when
     /// no policy is configured, and `Err(InvalidInput)` for negative amounts.
+    ///
+    /// Emits a `chk_ok` event on every successful check for auditability.
     pub fn check_spend(
         env: Env,
         account: Address,
@@ -150,11 +155,12 @@ impl MuxSpendingPolicy {
         let policy: SpendLimit = env
             .storage()
             .instance()
-            .get(&DataKey::SpendLimit(account, asset))
+            .get(&DataKey::SpendLimit(account.clone(), asset.clone()))
             .ok_or(SpendingPolicyError::PolicyNotFound)?;
         if amount > policy.limit {
             return Err(SpendingPolicyError::SpendLimitExceeded);
         }
+        emit(&env, symbol_short!("chk_ok"), (account, asset, amount));
         Ok(())
     }
 
@@ -291,9 +297,10 @@ mod tests {
         client.set_policy(&account, &asset, &100);
         client.set_policy(&account, &asset, &200);
         let events = env.events().all();
-        // init + pol_set + pol_set
+        // init + lmt_set + lmt_set  (both create and update emit lmt_set)
         assert_eq!(events.len(), 3);
-        assert_eq!(topic_action(&env, &events, 2), symbol_short!("pol_set"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("lmt_set"));
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("lmt_set"));
     }
 
     // ── get_policy ────────────────────────────────────────────────────────────
@@ -693,21 +700,42 @@ mod tests {
     }
 
     #[test]
-    fn test_check_spend_does_not_emit_event() {
+    fn test_check_spend_emits_chk_ok_event() {
         use soroban_sdk::testutils::Events;
-        
+
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        
+
         client.set_policy(&account, &asset, &1000);
-        
-        // Clear events from setup and set_policy
+
+        // Clear events accumulated so far (init + lmt_set).
         env.events().all();
-        
-        // check_spend should not emit events (read-only operation)
+
+        // A successful check_spend must emit exactly one chk_ok event.
         client.check_spend(&account, &asset, &500);
-        
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("chk_ok"));
+    }
+
+    #[test]
+    fn test_check_spend_failure_does_not_emit_event() {
+        use soroban_sdk::testutils::Events;
+
+        let (env, client, _) = setup();
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+
+        client.set_policy(&account, &asset, &1000);
+
+        // Clear setup events.
+        env.events().all();
+
+        // A failing check_spend must not emit any event.
+        let _ = client.try_check_spend(&account, &asset, &9999);
+
         let events = env.events().all();
         assert_eq!(events.len(), 0);
     }
@@ -758,6 +786,7 @@ mod tests {
         let actions = [
             symbol_short!("init"),
             symbol_short!("lmt_set"),
+            symbol_short!("chk_ok"),
         ];
         for sym in tags.iter().chain(actions.iter()) {
             assert!(sym.to_val().len() <= 8);
