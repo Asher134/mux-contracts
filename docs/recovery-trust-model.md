@@ -1,6 +1,6 @@
 # mux-recovery — Recovery Trust Model
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Status:** Living document — update whenever the recovery contract changes.
 
 ---
@@ -15,7 +15,7 @@
 
 | Role | Who | Trust Level | Capabilities |
 |---|---|---|---|
-| **Owner** | Account holder | Highest | Cancel any pending recovery; normal account operations |
+| **Owner** | Account holder | Highest | Cancel any pending recovery; call `set_registry`; normal account operations |
 | **Guardian** | Trusted contacts set by owner at init | High | Initiate and execute recovery |
 | **Stranger** | Any other address | None | No recovery operations |
 
@@ -91,16 +91,36 @@ Only one `Pending` request may exist at a time. A second `initiate_recovery` cal
 
 ### 4.5 Audit events
 
-Every state mutation emits a structured event:
+Every state mutation emits a structured event under the `mux_recv` contract tag. The topics and data payload for each entrypoint are:
 
-| Entrypoint | Event topic | Data |
+| Entrypoint | Action topic | Data payload |
 |---|---|---|
 | `initialize` | `init` | `owner: Address` |
-| `initiate_recovery` | `rec_init` | `(guardian, new_owner, executable_at)` |
-| `execute_recovery` | `rec_exec` | `new_owner: Address` |
-| `cancel_recovery` | `rec_cncl` | `owner: Address` |
+| `initiate_recovery` | `rec_init` | `(guardian: Address, new_owner: Address)` |
+| `execute_recovery` | `rec_exec` | `(guardian: Address, new_owner: Address)` |
+| `cancel_recovery` | `rec_cncl` | `()` (unit) |
+| `set_registry` | `reg_link` | `registry_id: Address` |
 
-Off-chain watchers should subscribe to `rec_init` events and alert the owner immediately.
+All events follow the two-topic convention defined in [`docs/event-topic-conventions.md`](event-topic-conventions.md):
+
+```text
+topics[0]  "mux_recv"   — contract tag (Symbol)
+topics[1]  <action>     — action name (Symbol, ≤ 8 chars)
+data       <payload>    — action-specific value
+```
+
+Off-chain watchers should subscribe to `rec_init` events and alert the owner immediately when a recovery is initiated.
+
+### 4.6 Registry link
+
+An optional registry contract address (`registry_id`) can be associated with the recovery contract after initialization via `set_registry(owner, registry_id)`.
+
+- The field is stored under `DataKey::RegistryId` in instance storage.
+- Reading `registry_id()` returns `Option<Address>` — `None` if not set.
+- Setting the registry requires the current **owner's authorization** (`owner.require_auth()`).
+- A `reg_link` audit event is emitted each time the registry address is written, providing a full on-chain audit trail of any registry re-links.
+- The stored address is informational: the contract does **not** call the registry at link time. Off-chain tooling should cross-check that the registry contract at that address contains the expected metadata for this recovery deployment.
+- TypeScript binding methods: `setRegistry(sourceKeypair, owner, registryId)` and `getRegistryId(sourceKeypair)`.
 
 ---
 
@@ -108,25 +128,31 @@ Off-chain watchers should subscribe to `rec_init` events and alert the owner imm
 
 | Threat | Mitigation |
 |---|---|
-| Attacker compromises one guardian | Single guardian can initiate but owner has 24h to cancel |
-| All guardians collude | Owner has 24h cancellation window; monitor `rec_init` events |
+| Attacker compromises one guardian | Single guardian can initiate but owner has 24 h to cancel |
+| All guardians collude | Owner has 24 h cancellation window; monitor `rec_init` events |
 | Owner loses key, no guardians | Recovery impossible — owner must set guardians at init |
 | Attacker spams recovery requests | Only one Pending request allowed; each requires guardian auth |
 | Replay of old recovery request | Each request stores `initiated_at`; executed/cancelled requests cannot be re-executed |
 | Owner tries to remove guardians | Guardian set is immutable after `initialize` |
+| Malicious registry link | `set_registry` requires owner auth; `reg_link` event provides on-chain audit trail |
 
 ---
 
 ## 6. Limitations and Future Work
 
 - **No quorum threshold.** Currently any single guardian can initiate and execute recovery. A future version should require M-of-N guardian signatures.
+- **Single-signer guardian model.** Each guardian acts fully independently — there is no on-chain threshold. Any single guardian can both initiate and execute recovery without co-signing from other guardians. This increases the blast radius of a single compromised guardian key. Planned improvement: require a configurable M-of-N quorum.
 - **Immutable guardian set.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
 - **No guardian liveness check.** If all guardians lose their keys, recovery is impossible.
+- **No on-chain registry validation.** The `registry_id` field stores a registry contract address but the recovery contract does not call the registry during `set_registry`. Off-chain tooling must verify that the stored address points to the intended `mux-registry` deployment and that the registry metadata matches this contract's version and deployment. A mismatch is not detectable on-chain.
+- **Registry link is mutable.** The owner can call `set_registry` multiple times, overwriting the previous registry address. Each change emits a `reg_link` event for auditability, but off-chain tooling should always read the latest stored value rather than relying on the first event.
 
 ---
 
 ## 7. Related Documents
 
 - [`docs/threat-model.md`](threat-model.md) — overall Mux Protocol threat model
-- [`docs/audit-events.md`](audit-events.md) — event schema reference
+- [`docs/audit-events.md`](audit-events.md) — per-contract event catalog
+- [`docs/event-topic-conventions.md`](event-topic-conventions.md) — event topic layout, naming rules, and RPC filter examples
 - [`contracts/mux-recovery/src/lib.rs`](../contracts/mux-recovery/src/lib.rs) — contract source
+- Issue #403 — Recovery registry link: tracks the `set_registry()` entrypoint implementation
