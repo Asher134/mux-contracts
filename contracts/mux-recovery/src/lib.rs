@@ -506,18 +506,194 @@ mod tests {
     }
 
     // ── symbol_short length audit (#496) ─────────────────────────────────────
-
+    // symbol_short! enforces ≤ 8 chars at compile time; these declarations
+    // confirm all event tag/action strings compile without truncation.
     #[test]
     fn test_symbol_short_lengths_within_limit() {
-        let tags = [symbol_short!("mux_recv")];
-        let actions = [
-            symbol_short!("init"),
-            symbol_short!("rec_init"),
-            symbol_short!("rec_cncl"),
-            symbol_short!("rec_exec"),
-        ];
-        for sym in tags.iter().chain(actions.iter()) {
-            assert!(sym.to_val().len() <= 8);
-        }
+        let _mux_recv = symbol_short!("mux_recv");
+        let _init = symbol_short!("init");
+        let _rec_init = symbol_short!("rec_init");
+        let _rec_cncl = symbol_short!("rec_cncl");
+        let _rec_exec = symbol_short!("rec_exec");
+    }
+
+    // ── Negative path tests (#401) ────────────────────────────────────────────
+
+    // owner() and guardians() on an uninitialised contract
+
+    #[test]
+    fn test_owner_on_uninitialised_returns_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let err = client.try_owner().unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NotInitialized);
+    }
+
+    #[test]
+    fn test_guardians_on_uninitialised_returns_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let err = client.try_guardians().unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NotInitialized);
+    }
+
+    // cancel_recovery edge cases
+
+    #[test]
+    fn test_cancel_recovery_twice_second_rejected() {
+        // First cancel succeeds; second cancel sees no Pending request.
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        client.cancel_recovery();
+        let err = client.try_cancel_recovery().unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NoActiveRecovery);
+    }
+
+    #[test]
+    fn test_cancel_recovery_on_uninitialised_returns_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let err = client.try_cancel_recovery().unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NotInitialized);
+    }
+
+    // execute_recovery timelock boundary conditions
+
+    #[test]
+    fn test_execute_recovery_exactly_at_timelock_boundary_succeeds() {
+        // initiated_at = 0 (default ledger sequence)
+        // executable_at = 0 + 17_280 = 17_280
+        // Condition: sequence < executable_at  =>  17_280 < 17_280  =>  false
+        // Therefore execution at exactly RECOVERY_TIMELOCK ledgers SUCCEEDS.
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger().with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK);
+        client.execute_recovery(&guardian);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+    }
+
+    #[test]
+    fn test_execute_recovery_one_ledger_before_timelock_rejected() {
+        // Advance by RECOVERY_TIMELOCK - 1 => sequence = 17_279 < 17_280 => TimelockNotExpired
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK - 1);
+        let err = client
+            .try_execute_recovery(&guardian)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::TimelockNotExpired);
+    }
+
+    #[test]
+    fn test_execute_recovery_twice_second_rejected() {
+        // After execution the request is Executed (not Pending) — second attempt fails.
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        client.execute_recovery(&guardian);
+        let err = client
+            .try_execute_recovery(&guardian)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::NoActiveRecovery);
+    }
+
+    // Re-initiate after terminal states
+
+    #[test]
+    fn test_initiate_recovery_after_cancelled_succeeds() {
+        // A Cancelled request is no longer Pending; a new initiation must succeed.
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        client.cancel_recovery();
+        assert_eq!(client.recovery_status(), RecoveryStatus::Cancelled);
+
+        let new_owner2 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner2);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    }
+
+    #[test]
+    fn test_initiate_recovery_after_executed_allowed() {
+        // After execution the request is Executed; the original guardian can
+        // start a new recovery (guardians are immutable, so they remain valid).
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        client.execute_recovery(&guardian);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+
+        let new_owner2 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner2);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    }
+
+    // Multi-guardian scenarios
+
+    #[test]
+    fn test_second_guardian_can_execute_recovery_initiated_by_first() {
+        // Guardian set has two members; guardian1 initiates, guardian2 executes.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let guardian1 = Address::generate(&env);
+        let guardian2 = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, guardian1.clone(), guardian2.clone()]);
+
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian1, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        client.execute_recovery(&guardian2);
+
+        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+        assert_eq!(client.owner(), new_owner);
+    }
+
+    #[test]
+    fn test_non_guardian_cannot_execute_even_after_timelock() {
+        // A stranger address (not in the guardian set) cannot execute recovery.
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        let stranger = Address::generate(&env);
+        let err = client
+            .try_execute_recovery(&stranger)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+    }
+
+    #[test]
+    fn test_non_guardian_cannot_initiate_recovery() {
+        // A stranger that is not in the guardian set cannot initiate recovery.
+        let (env, client, _, _) = setup();
+        let stranger = Address::generate(&env);
+        let new_owner = Address::generate(&env);
+        let err = client
+            .try_initiate_recovery(&stranger, &new_owner)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
     }
 }
