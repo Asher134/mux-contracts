@@ -3,6 +3,11 @@
  *
  * Allows atomically executing a sequence of cross-contract calls in a
  * single transaction, with optional per-operation authorization checks.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -325,7 +330,10 @@ impl MuxBatcher {
     /// separately from executed ones.
     ///
     /// Returns `Err(EmptyBatch)` or `Err(BatchTooLarge)` on invalid input.
-    /// Does **not** invoke target contracts.
+    /// Does **not** invoke target contracts or write any storage.
+    ///
+    /// See `docs/simulate-batch.md` for full usage patterns, limitations,
+    /// and TypeScript binding examples.
     pub fn simulate_batch(
         env: Env,
         caller: Address,
@@ -461,7 +469,21 @@ mod tests {
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_execute_batch(&caller, &ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
+    }
+
+    #[test]
+    fn test_empty_batch_does_not_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops: Vec<Operation> = Vec::new(&env);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -617,7 +639,8 @@ mod tests {
 
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_submit_batch(&ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -720,7 +743,9 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        assert!(client.try_estimate_fees(&0).is_err());
+        let result = client.try_estimate_fees(&0);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -789,7 +814,9 @@ mod tests {
 
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
-        assert!(client.try_simulate_batch(&caller, &ops).is_err());
+        let result = client.try_simulate_batch(&caller, &ops);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -926,5 +953,22 @@ mod tests {
             kind: BatchOperationKind::Invoke,
         });
         let _ = client.try_submit_batch(&ops);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_bat")];
+        let actions = [
+            symbol_short!("bat_start"),
+            symbol_short!("executed"),
+            symbol_short!("bat_ok"),
+            symbol_short!("bat_abort"),
+            symbol_short!("sim_done"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }
