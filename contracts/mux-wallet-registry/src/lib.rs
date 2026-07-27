@@ -220,6 +220,17 @@ impl MuxWalletRegistry {
             .ok_or(WalletRegistryError::WalletNotFound)
     }
 
+    /// List all registered wallet names.
+    ///
+    /// Returns an empty vec if `initialize` has not been called yet.
+    /// No authorisation is required.
+    pub fn list_wallets(env: Env) -> Vec<Symbol> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Names)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
     // ── Private helpers ────────────────────────────────────────────────────────
 
     /// Fetch the stored owner and require their auth. Returns
