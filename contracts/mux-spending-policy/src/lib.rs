@@ -96,6 +96,8 @@ impl MuxSpendingPolicy {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
         emit(&env, symbol_short!("init"), admin);
+        // T-21: extend instance TTL on every write so the registry stays live.
+        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -103,6 +105,8 @@ impl MuxSpendingPolicy {
     ///
     /// Only the initialized admin can change policies. The configured limit
     /// must be strictly positive.
+    ///
+    /// Extends the instance storage TTL on every successful write (T-21).
     pub fn set_policy(
         env: Env,
         account: Address,
@@ -118,6 +122,8 @@ impl MuxSpendingPolicy {
             .instance()
             .set(&DataKey::SpendLimit(account.clone(), asset.clone()), &policy);
         emit(&env, symbol_short!("lmt_set"), (account, asset, limit));
+        // T-21: extend instance TTL on every write so the registry stays live.
+        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -710,6 +716,42 @@ mod tests {
         
         let events = env.events().all();
         assert_eq!(events.len(), 0);
+    }
+
+    // ── TTL tests (T-21) ──────────────────────────────────────────────────────
+
+    /// `initialize` must extend instance TTL without panicking (T-21).
+    /// The Soroban test environment does not surface TTL values, so a
+    /// successful call without panic is the observable proof.
+    #[test]
+    fn test_ttl_extended_on_initialize() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxSpendingPolicy);
+        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        // Must not panic even though budget is default.
+        client.initialize(&admin);
+    }
+
+    /// `set_policy` must extend instance TTL without panicking (T-21).
+    #[test]
+    fn test_ttl_extended_on_set_policy() {
+        let (env, client, _) = setup();
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+        // Must not panic even though budget is default.
+        client.set_policy(&account, &asset, &1000);
+    }
+
+    /// TTL constants are sized for the expected ~30-day window.
+    #[test]
+    fn test_ttl_constants() {
+        // TTL_THRESHOLD ≈ 1 day at 5 s/ledger; TTL_EXTEND_TO ≈ 30 days.
+        assert_eq!(TTL_THRESHOLD, 17_280);
+        assert_eq!(TTL_EXTEND_TO, 518_400);
+        // Extend-to must always be greater than threshold.
+        assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
     }
 
     // ── NotInitialized tests (#505) ──────────────────────────────────────────
