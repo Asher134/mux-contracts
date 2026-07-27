@@ -217,6 +217,19 @@ build_contracts() {
   cd "$REPO_ROOT"
   cargo build --target wasm32-unknown-unknown --release --workspace
   log_success "Build complete"
+
+  # Print SHA-256 hashes of all produced WASM files so operators can record
+  # and later verify them with scripts/verify-wasm-hash.sh (#455).
+  log_info "WASM hashes (record these for deployment verification):"
+  for wasm in "${WASM_DIR}"/*.wasm; do
+    [[ -f "$wasm" ]] || continue
+    if command -v sha256sum >/dev/null 2>&1; then
+      hash=$(sha256sum "$wasm" | awk '{print $1}')
+    else
+      hash=$(shasum -a 256 "$wasm" | awk '{print $1}')
+    fi
+    log_info "  $(basename "$wasm"): $hash"
+  done
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
