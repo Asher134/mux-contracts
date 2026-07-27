@@ -33,6 +33,7 @@ dist/
 .env
 .env.localnet
 .env.deploy
+deploy.env
 
 # Build artifacts
 *.o

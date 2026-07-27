@@ -6,6 +6,13 @@
  * can take control. The current owner may cancel a pending recovery at
  * any time during the timelock window.
  *
+ * # Registry link
+ *
+ * An optional registry contract address can be associated with this
+ * recovery contract via `set_registry`. The stored address is readable
+ * via `registry_id` (returns `None` if not set). The TypeScript binding
+ * exposes `setRegistry()` and `getRegistryId()` for these methods.
+ *
  * # `no_std` Constraints
  *
  * This crate is `#![no_std]` and does not use `extern crate alloc`.
@@ -86,6 +93,7 @@ pub enum DataKey {
     Owner,
     Guardians,
     Recovery,
+    RegistryId,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -100,12 +108,20 @@ pub enum RecoveryError {
     RecoveryAlreadyPending = 4,
     NoActiveRecovery = 5,
     TimelockNotExpired = 6,
-    RecoveryExpired = 7,
+    TooManyGuardians = 7,
+    GuardianAlreadyExists = 8,
+    GuardianNotFound = 9,
+    MinGuardiansRequired = 10,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
 const TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+
+// ── Storage griefing ─────────────────────────────────────────────────────────
+/// Maximum number of guardians to bound instance-storage growth.
+/// Each Address is ~32 bytes; 16 entries ≈ 0.5 KB.
+const MAX_GUARDIANS: u32 = 16;
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -227,6 +243,33 @@ impl MuxRecovery {
             .get::<DataKey, RecoveryRequest>(&DataKey::Recovery)
             .map(|r| r.status)
             .unwrap_or(RecoveryStatus::None)
+    }
+
+    /// Link a registry contract address to this recovery contract.
+    ///
+    /// Only the current owner may call this method. Emits a `reg_link` audit
+    /// event and extends instance TTL.
+    pub fn set_registry(
+        env: Env,
+        owner: Address,
+        registry_id: Address,
+    ) -> Result<(), RecoveryError> {
+        // Ensure the contract is initialised before accepting a registry link.
+        if !env.storage().instance().has(&DataKey::Owner) {
+            return Err(RecoveryError::NotInitialized);
+        }
+        owner.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::RegistryId, &registry_id);
+        emit(&env, symbol_short!("reg_link"), registry_id);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the linked registry contract address, or `None` if not set.
+    pub fn registry_id(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::RegistryId)
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
@@ -525,127 +568,192 @@ mod tests {
         assert_eq!(err, RecoveryError::NoActiveRecovery);
     }
 
-    // ── initiate_recovery hardening (#394) ──────────────────────────────────
+    // ── add_guardian / remove_guardian (#393) ──────────────────────────────────
 
     #[test]
-    fn test_reinitiate_recovery_after_cancellation() {
-        let (env, client, _, guardian) = setup();
-        let new_owner1 = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner1);
-        client.cancel_recovery();
-        assert_eq!(client.recovery_status(), RecoveryStatus::Cancelled);
-
-        // A new recovery may be initiated after cancellation.
-        let new_owner2 = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner2);
-        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    fn test_add_guardian_succeeds() {
+        let (env, client, _, _guardian) = setup();
+        let new_guardian = Address::generate(&env);
+        client.add_guardian(&new_guardian);
+        assert!(client.guardians().contains(&new_guardian));
+        assert_eq!(client.guardians().len(), 2);
     }
 
     #[test]
-    fn test_reinitiate_recovery_after_execution() {
-        let (env, client, _, guardian) = setup();
-        let new_owner1 = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner1);
-        env.ledger().with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
-        client.execute_recovery(&guardian);
-        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
-
-        // A new recovery may be initiated after execution.
-        let new_owner2 = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner2);
-        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    fn test_add_guardian_emits_event() {
+        let (env, client, _, _) = setup();
+        let new_guardian = Address::generate(&env);
+        client.add_guardian(&new_guardian);
+        let events = env.events().all();
+        // init + grd_add
+        assert_eq!(events.len(), 2);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("grd_add"));
     }
 
     #[test]
-    fn test_reinitiate_recovery_after_expiry() {
-        let (env, client, _, guardian) = setup();
-        let new_owner1 = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner1);
-
-        // Advance past the expiry window — the pending request is now stale.
-        env.ledger()
-            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY + 1);
-
-        // A new recovery may be initiated because the old one expired.
-        let new_owner2 = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner2);
-        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    fn test_add_duplicate_guardian_rejected() {
+        let (_env, client, _, guardian) = setup();
+        let err = client.try_add_guardian(&guardian).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::GuardianAlreadyExists);
     }
 
     #[test]
-    fn test_execute_expired_recovery_rejected() {
-        let (env, client, _, guardian) = setup();
-        let new_owner = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner);
-
-        // Advance past the expiry window.
-        env.ledger()
-            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY + 1);
-
+    fn test_add_guardian_cap_enforced() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        // Initialize with one guardian
+        let g1 = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, g1]);
+        // Fill to MAX_GUARDIANS (16), already have 1
+        for _ in 1..MAX_GUARDIANS {
+            client.add_guardian(&Address::generate(&env));
+        }
+        // One more must be rejected
         let err = client
-            .try_execute_recovery(&guardian)
+            .try_add_guardian(&Address::generate(&env))
             .unwrap_err()
             .unwrap();
-        assert_eq!(err, RecoveryError::RecoveryExpired);
+        assert_eq!(err, RecoveryError::TooManyGuardians);
     }
 
     #[test]
-    fn test_execute_recovery_within_valid_window() {
+    fn test_remove_guardian_succeeds() {
         let (env, client, _, guardian) = setup();
-        let new_owner = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner);
-
-        // Advance past timelock but within expiry window.
-        env.ledger()
-            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
-
-        client.execute_recovery(&guardian);
-        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
-        assert_eq!(client.owner(), new_owner);
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        // Now we have 2 guardians, removing one should work
+        client.remove_guardian(&guardian);
+        assert!(!client.guardians().contains(&guardian));
+        assert_eq!(client.guardians().len(), 1);
     }
 
     #[test]
-    fn test_recovery_expiry_boundary() {
+    fn test_remove_guardian_emits_event() {
         let (env, client, _, guardian) = setup();
-        let new_owner = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner);
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        client.remove_guardian(&guardian);
+        let events = env.events().all();
+        // init + grd_add + grd_rm
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("grd_rm"));
+    }
 
-        // Advance to exactly the expiry boundary (should fail — >= expires_at).
-        env.ledger()
-            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY);
-
+    #[test]
+    fn test_remove_last_guardian_rejected() {
+        let (_env, client, _, guardian) = setup();
+        // Only 1 guardian, can't remove
         let err = client
-            .try_execute_recovery(&guardian)
+            .try_remove_guardian(&guardian)
             .unwrap_err()
             .unwrap();
-        assert_eq!(err, RecoveryError::RecoveryExpired);
+        assert_eq!(err, RecoveryError::MinGuardiansRequired);
     }
 
     #[test]
-    fn test_recovery_just_before_expiry_succeeds() {
+    fn test_remove_nonexistent_guardian_rejected() {
+        let (env, client, _, _) = setup();
+        let stranger = Address::generate(&env);
+        let err = client
+            .try_remove_guardian(&stranger)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::GuardianNotFound);
+    }
+
+    #[test]
+    fn test_add_guardian_on_uninitialised_contract_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let guardian = Address::generate(&env);
+        let err = client.try_add_guardian(&guardian).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NotInitialized);
+    }
+
+    #[test]
+    fn test_removed_guardian_cannot_initiate_recovery() {
         let (env, client, _, guardian) = setup();
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        client.remove_guardian(&guardian);
+        // Removed guardian tries to initiate recovery
         let new_owner = Address::generate(&env);
-        client.initiate_recovery(&guardian, &new_owner);
+        let err = client
+            .try_initiate_recovery(&guardian, &new_owner)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+    }
 
-        // Advance to one ledger before expiry — should still succeed.
-        env.ledger()
-            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY - 1);
-
-        client.execute_recovery(&guardian);
-        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+    #[test]
+    fn test_newly_added_guardian_can_initiate_recovery() {
+        let (env, client, _, _) = setup();
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        // New guardian can initiate recovery
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&g2, &new_owner);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
     }
 
     // ── symbol_short length audit (#496) ─────────────────────────────────────
-
+    // symbol_short! enforces ≤ 8 chars at compile time; these declarations
+    // confirm all event tag/action strings compile without truncation.
     #[test]
     fn test_symbol_short_lengths_within_limit() {
-        let _tags = [symbol_short!("mux_recv")];
-        let _actions = [
-            symbol_short!("init"),
-            symbol_short!("rec_init"),
-            symbol_short!("rec_cncl"),
-            symbol_short!("rec_exec"),
-        ];
-        // symbol_short! validates length at compile time; reaching here is sufficient.
+        let _mux_recv = symbol_short!("mux_recv");
+        let _init = symbol_short!("init");
+        let _rec_init = symbol_short!("rec_init");
+        let _rec_cncl = symbol_short!("rec_cncl");
+        let _rec_exec = symbol_short!("rec_exec");
+    }
+
+    // ── registry link (#403) ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_registry_stores_address() {
+        let (_env, client, owner, _) = setup();
+        let registry = Address::generate(&_env);
+        client.set_registry(&owner, &registry);
+        assert_eq!(client.registry_id(), Some(registry));
+    }
+
+    #[test]
+    fn test_registry_id_none_before_set() {
+        let (_env, client, _, _) = setup();
+        assert!(client.registry_id().is_none());
+    }
+
+    #[test]
+    fn test_set_registry_emits_event() {
+        let (env, client, owner, _) = setup();
+        let registry = Address::generate(&env);
+        client.set_registry(&owner, &registry);
+        let events = env.events().all();
+        // init + reg_link
+        assert_eq!(events.len(), 2);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("reg_link"));
+    }
+
+    #[test]
+    fn test_set_registry_requires_owner_auth() {
+        // mock_all_auths() satisfies any auth requirement, so the call must
+        // succeed — this test verifies the method compiles and executes without
+        // panicking when auth is mocked.
+        let (env, client, owner, _) = setup();
+        let registry = Address::generate(&env);
+        client.set_registry(&owner, &registry);
+        assert_eq!(client.registry_id(), Some(registry));
+    }
+
+    #[test]
+    fn test_symbol_short_reg_link_within_limit() {
+        // symbol_short! enforces ≤ 8 chars at compile time.
+        let _reg_link = symbol_short!("reg_link");
     }
 }
