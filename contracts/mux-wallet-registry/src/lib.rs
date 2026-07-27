@@ -5,8 +5,22 @@
  *
  * # `no_std` Constraints
  *
- * This crate is `#![no_std]` and does not use `extern crate alloc`.
- * All data structures use Soroban SDK types backed by the Soroban host.
+ * This crate is `#![no_std]`. All data structures use Soroban SDK types
+ * backed by the Soroban host. `extern crate alloc` is used only inside
+ * `#[cfg(test)]` modules where `alloc::format!` is needed for test symbol
+ * generation.
+ *
+ * # Events
+ *
+ * Contract tag: `mux_wreg`
+ *
+ * | Action     | Trigger                              | Data payload                      |
+ * |------------|--------------------------------------|-----------------------------------|
+ * | `init`     | `initialize` succeeds                | `owner: Address`                  |
+ * | `wlt_reg`  | `register_wallet` succeeds           | `(name: Symbol, wallet: Address)` |
+ * | `wlt_meta` | `register_wallet_with_metadata` succeeds | `(name: Symbol, wallet: Address)` |
+ *
+ * Failed paths (errors returned) emit **no** events.
  *
  * ## Upgrade Migration Notes
  *
@@ -33,8 +47,21 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
+    Symbol, Vec,
 };
+
+// ── Audit events ──────────────────────────────────────────────────────────────
+
+/// Emit a contract event under the `mux_wreg` topic namespace.
+///
+/// Topics layout: `[mux_wreg, action]`; data is the action-specific payload.
+/// Only called on successful, state-mutating paths — error return paths must
+/// never reach this helper.
+fn emit(env: &Env, action: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events()
+        .publish((symbol_short!("mux_wreg"), action), data);
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -120,6 +147,7 @@ impl MuxWalletRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        emit(&env, symbol_short!("init"), owner);
         Self::extend_ttl(&env);
         Ok(())
     }
