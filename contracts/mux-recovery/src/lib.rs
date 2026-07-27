@@ -43,6 +43,14 @@ fn emit(env: &Env, action: soroban_sdk::Symbol, data: impl soroban_sdk::IntoVal<
 /// before it can be executed.
 pub const RECOVERY_TIMELOCK: u32 = 17_280;
 
+/// Maximum number of ledgers after initiation during which a recovery
+/// can be executed. After this window, the request auto-expires and a
+/// new recovery must be initiated.
+///
+/// At ~5-second ledger close times:
+///   120_960 ledgers ≈ 7 days
+pub const RECOVERY_EXPIRY: u32 = 120_960;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// Lifecycle state of a recovery request.
@@ -70,6 +78,10 @@ pub struct RecoveryRequest {
     /// The earliest ledger at which `execute_recovery` may be called
     /// (`initiated_at + RECOVERY_TIMELOCK`).
     pub executable_at: u32,
+    /// The latest ledger at which `execute_recovery` may still be called.
+    /// After this point the request is considered expired and a new
+    /// recovery must be initiated (`initiated_at + RECOVERY_EXPIRY`).
+    pub expires_at: u32,
     /// Current lifecycle state.
     pub status: RecoveryStatus,
 }
@@ -147,9 +159,12 @@ impl MuxRecovery {
         guardian.require_auth();
         Self::require_guardian(&env, &guardian)?;
 
-        // Reject if a pending recovery already exists.
+        // Reject if a non-expired pending recovery already exists.
+        // Expired pending requests are treated as stale and may be overwritten.
         if let Some(req) = Self::active_recovery(&env) {
-            if req.status == RecoveryStatus::Pending {
+            if req.status == RecoveryStatus::Pending
+                && env.ledger().sequence() < req.expires_at
+            {
                 return Err(RecoveryError::RecoveryAlreadyPending);
             }
         }
@@ -159,6 +174,7 @@ impl MuxRecovery {
             new_owner: new_owner.clone(),
             initiated_at,
             executable_at: initiated_at.saturating_add(RECOVERY_TIMELOCK),
+            expires_at: initiated_at.saturating_add(RECOVERY_EXPIRY),
             status: RecoveryStatus::Pending,
         };
         env.storage().instance().set(&DataKey::Recovery, &request);
@@ -190,6 +206,9 @@ impl MuxRecovery {
 
         if env.ledger().sequence() < request.executable_at {
             return Err(RecoveryError::TimelockNotExpired);
+        }
+        if env.ledger().sequence() >= request.expires_at {
+            return Err(RecoveryError::RecoveryExpired);
         }
 
         let new_owner = request.new_owner.clone();
