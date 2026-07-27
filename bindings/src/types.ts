@@ -86,8 +86,9 @@ export type MuxDelegationError =
  * Mirrors the on-chain `MuxDelegationError` enum in
  * `contracts/mux-delegation/src/lib.rs` (stable ABI codes 6001–6004).
  *
- * Error codes used by `revoke_delegate`:
- *   - `NotADelegate` (6001): no grant exists for the (owner, delegate) pair.
+ * Relevant to the delegate permissions map (closes #407):
+ *   - `getDelegatePermissions` and `isDelegate` are read-only and do not
+ *     return errors; they return an empty list / false for unknown pairs.
  *
  * @example
  * ```ts
