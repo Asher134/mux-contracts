@@ -103,6 +103,7 @@ describe("checkDelegate method shape", () => {
 // ── HTTP error mapping ────────────────────────────────────────────────────────
 
 describe("Delegation error HTTP mapping", () => {
+  // Revoke-path error: no grant found for the (owner, delegate) pair.
   it("maps NotADelegate to 404", () => {
     expect(ERROR_HTTP_MAP.NotADelegate).toBe(404);
   });
