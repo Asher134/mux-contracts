@@ -89,6 +89,9 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   // State conflict → 409
   AlreadyInitialized: 409,
 
+  // Batcher: metadata already set → 409 Conflict
+  MetadataAlreadySet: 409,
+
   // Security guard violations → 409 Conflict (concurrent/reentrant call)
   ReentrancyDetected: 409,
 

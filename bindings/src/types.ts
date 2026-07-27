@@ -71,7 +71,55 @@ export type MuxBatcherError =
   | "BatchTooLarge"
   | "RequiredOperationFailed"
   | "Unauthorized"
-  | "ReentrancyDetected";
+  | "ReentrancyDetected"
+  | "MetadataAlreadySet";
+
+/**
+ * Contract-level metadata stored once at deployment for registry discovery.
+ * Mirrors the on-chain `BatcherMeta` struct.
+ */
+export interface BatcherMeta {
+  /** Short human-readable description of the contract. */
+  description: string;
+  /** Author or team identifier. */
+  author: string;
+}
+
+/**
+ * Maps a `MuxBatcherError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `MuxBatcherError` enum in `contracts/mux-batcher`.
+ *
+ * @example
+ * ```ts
+ * import { muxBatcherErrorMessage } from "./types";
+ * console.log(muxBatcherErrorMessage("BatchTooLarge")); // "batch exceeds the maximum operation count"
+ * console.log(muxBatcherErrorMessage(2));               // "batch exceeds the maximum operation count"
+ * ```
+ */
+export function muxBatcherErrorMessage(error: MuxBatcherError | number): string {
+  const codeMap: Record<number, string> = {
+    1: "batch contains no operations",
+    2: "batch exceeds the maximum operation count",
+    3: "a required operation failed; the batch was aborted",
+    4: "caller is not authorized",
+    5: "reentrant call into the batcher detected",
+    6: "metadata has already been set for this batcher instance",
+  };
+
+  const nameMap: Record<MuxBatcherError, number> = {
+    EmptyBatch: 1,
+    BatchTooLarge: 2,
+    RequiredOperationFailed: 3,
+    Unauthorized: 4,
+    ReentrancyDetected: 5,
+    MetadataAlreadySet: 6,
+  };
+
+  const code = typeof error === "number" ? error : nameMap[error] ?? -1;
+  return codeMap[code] ?? "unknown error code";
+}
 
 export type MuxDelegationError =
   | "NotADelegate"
