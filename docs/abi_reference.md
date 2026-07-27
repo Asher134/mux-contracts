@@ -71,11 +71,21 @@ pub struct AccountMetadata {
 ### Types
 
 ```rust
+/// Classifies the intent of a batched operation.
+/// Informational only — the batcher does not gate execution on the kind.
+pub enum BatchOperationKind {
+    Invoke,   // Generic cross-contract function call (default)
+    Transfer, // Asset transfer (e.g. SAC `transfer`)
+    Approve,  // Allowance / approval (e.g. SAC `approve`)
+}
+
 pub struct Operation {
     pub target: Address,
     pub fn_name: Symbol,
     pub args: Vec<Val>,
     pub require_success: bool,
+    /// Operation intent — surfaced in events and TypeScript clients.
+    pub kind: BatchOperationKind,
 }
 
 pub struct BatchResult {
@@ -83,33 +93,62 @@ pub struct BatchResult {
     pub failure_count: u32,
     pub errors: Vec<Bytes>,
 }
+
+/// Contract-level metadata stored once at deployment for registry discovery.
+pub struct BatcherMeta {
+    pub description: String,
+    pub author: String,
+}
 ```
+
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `MAX_BATCH_SIZE` | 50 | Maximum operations per batch; enforced on every entry point |
+| `FEE_PER_OP` | 100 stroops | Base fee per operation used by `estimate_fees` |
+| `TTL_THRESHOLD` | 17,280 ledgers | ~1 day — TTL extension trigger |
+| `TTL_EXTEND_TO` | 518,400 ledgers | ~30 days — TTL extended to |
 
 ### Methods
 
-| Method | Args | Returns | Description |
-|---|---|---|---|
-| `execute_batch` | `caller: Address, ops: Vec<Operation>` | `Result<BatchResult, MuxBatcherError>` | Execute a batch of cross-contract calls atomically |
-| `simulate_batch` | `caller: Address, ops: Vec<Operation>` | `Result<BatchResult, MuxBatcherError>` | Preflight check — no state written |
-| `max_batch_size` | — | `u32` | Returns the maximum allowed operations per batch (50) |
+| Method | Args | Returns | Auth | Description |
+|---|---|---|---|---|
+| `execute_batch` | `caller: Address, ops: Vec<Operation>` | `Result<BatchResult, MuxBatcherError>` | `caller` | Execute a batch of cross-contract calls atomically |
+| `submit_batch` | `ops: Vec<Operation>` | `Result<BatchResult, MuxBatcherError>` | invoker | Convenience wrapper — derives caller from the invoking address |
+| `simulate_batch` | `caller: Address, ops: Vec<Operation>` | `Result<BatchResult, MuxBatcherError>` | `caller` | Preflight check — no state written, no contracts called |
+| `estimate_fees` | `op_count: u32` | `Result<u32, MuxBatcherError>` | none | Returns `op_count × FEE_PER_OP` stroops; pure computation, no state touched |
+| `max_batch_size` | — | `u32` | none | Returns `MAX_BATCH_SIZE` (50) |
+| `set_registry_metadata` | `description: String, author: String` | `Result<(), MuxBatcherError>` | none | Store deployment metadata once; returns `Err(MetadataAlreadySet)` on repeat calls |
+| `get_registry_metadata` | — | `Option<BatcherMeta>` | none | Return stored metadata, or `None` if not set |
 
 ### Events
 
 | Topic | Data | Condition |
 |---|---|---|
+| `bat_start` | `(caller, op_count)` | Emitted at the start of every `execute_batch` call, before any operations run |
 | `executed` | `(caller, success_count, failure_count)` | Every successful `execute_batch` call |
 | `bat_ok` | `(caller, success_count)` | All operations succeeded (`failure_count == 0`) |
 | `bat_abort` | `caller` | A `require_success=true` operation failed |
+| `sim_done` | `(caller, success_count)` | Successful `simulate_batch` call |
 
 ### Errors
 
 | Variant | Code | HTTP | Description |
 |---|---|---|---|
-| `EmptyBatch` | 1 | 400 | `ops` vector is empty |
-| `BatchTooLarge` | 2 | 400 | `ops.len() > 50` |
+| `EmptyBatch` | 1 | 400 | `ops` vector is empty, or `op_count == 0` for `estimate_fees` |
+| `BatchTooLarge` | 2 | 400 | `ops.len() > 50`, or `op_count > 50` for `estimate_fees` |
 | `RequiredOperationFailed` | 3 | 500 | A `require_success=true` op failed |
 | `Unauthorized` | 4 | 401 | Reserved for future per-op auth checks |
 | `ReentrancyDetected` | 5 | 409 | A batched op re-entered `execute_batch` |
+| `MetadataAlreadySet` | 6 | 409 | `set_registry_metadata` called after metadata was already stored |
+
+### Notes
+
+- `execute_batch` and `submit_batch` enforce `require_auth()` on the caller; `simulate_batch` does too, even though no state is written.
+- `estimate_fees` and `max_batch_size` are pure reads requiring no authorization.
+- `set_registry_metadata` is write-once with no auth check — it is expected to be called by the deployer immediately after deployment.
+- Instance storage TTL is extended on every successful `execute_batch` call and on `set_registry_metadata`. See [batcher-fees.md](batcher-fees.md) and [batching-limits.md](batching-limits.md) for details.
 
 ---
 
