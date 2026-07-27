@@ -105,7 +105,7 @@ export type MuxPermissionsError =
  * ```
  */
 export function muxPermissionsErrorMessage(
-  error: MuxPermissionsError | number
+  error: MuxPermissionsError | number,
 ): string {
   const codeMap: Record<number, string> = {
     1: "contract not initialized",
@@ -133,8 +133,7 @@ export function muxPermissionsErrorMessage(
     AlreadyApproved: 10,
   };
 
-  const code =
-    typeof error === "number" ? error : nameMap[error] ?? -1;
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
   return codeMap[code] ?? "unknown error code";
 }
 
@@ -152,7 +151,7 @@ export function muxPermissionsErrorMessage(
  * ```
  */
 export function muxAccountErrorMessage(
-  error: MuxAccountError | number
+  error: MuxAccountError | number,
 ): string {
   const codeMap: Record<number, string> = {
     1: "contract not initialized",
@@ -166,6 +165,7 @@ export function muxAccountErrorMessage(
     9: "too many delegates",
     10: "reentrancy detected",
     11: "arithmetic overflow",
+    12: "too many session keys",
   };
 
   const nameMap: Record<MuxAccountError, number> = {
@@ -180,16 +180,54 @@ export function muxAccountErrorMessage(
     TooManyDelegates: 9,
     ReentrancyDetected: 10,
     ArithmeticOverflow: 11,
+    TooManySessionKeys: 12,
   };
 
-  const code =
-    typeof error === "number" ? error : nameMap[error] ?? -1;
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
   return codeMap[code] ?? "unknown error code";
 }
 
 export interface SpendingPolicyLimit {
   asset: Address;
   limit: bigint;
+}
+
+/**
+ * Maps a `SpendingPolicyError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `SpendingPolicyError` enum in `contracts/mux-spending-policy`.
+ *
+ * @example
+ * ```ts
+ * import { spendingPolicyErrorMessage } from "./types";
+ * console.log(spendingPolicyErrorMessage("PolicyNotFound")); // "policy not found"
+ * console.log(spendingPolicyErrorMessage(4));                // "policy not found"
+ * ```
+ */
+export function spendingPolicyErrorMessage(
+  error: SpendingPolicyError | number,
+): string {
+  const codeMap: Record<number, string> = {
+    1: "contract not initialized",
+    2: "contract already initialized",
+    3: "caller is not authorized",
+    4: "policy not found",
+    5: "spend limit exceeded",
+    6: "invalid input",
+  };
+
+  const nameMap: Record<SpendingPolicyError, number> = {
+    NotInitialized: 1,
+    AlreadyInitialized: 2,
+    Unauthorized: 3,
+    PolicyNotFound: 4,
+    SpendLimitExceeded: 5,
+    InvalidInput: 6,
+  };
+
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
+  return codeMap[code] ?? "unknown error code";
 }
 
 export type MuxPolicyError =
@@ -206,4 +244,12 @@ export type SpendingPolicyError =
   | "AlreadyInitialized"
   | "Unauthorized"
   | "PolicyNotFound"
-  | "SpendLimitExceeded";
+  | "SpendLimitExceeded"
+  | "InvalidInput";
+
+export type MuxWalletRegistryError =
+  | "NotInitialized"
+  | "AlreadyInitialized"
+  | "Unauthorized"
+  | "WalletNotFound"
+  | "TooManyWallets";

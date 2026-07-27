@@ -289,6 +289,57 @@ pub struct RoleInfo {
 
 ---
 
+## mux-spending-policy
+
+Spending-policy enforcement contract. Stores per-account spend limits and validates spend requests.
+
+### Types
+
+```rust
+pub struct SpendLimit {
+    pub asset: Address,
+    pub limit: i128,
+}
+```
+
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `TTL_THRESHOLD` | 17,280 | ~1 day — TTL extension trigger (ledgers) |
+| `TTL_EXTEND_TO` | 518,400 | ~30 days — TTL extended to (ledgers) |
+
+### Methods
+
+| Method | Args | Returns | Auth | Description |
+|---|---|---|---|---|
+| `initialize` | `admin: Address` | `Result<(), SpendingPolicyError>` | `admin` | One-time setup; stores the admin address |
+| `set_policy` | `account: Address, asset: Address, limit: i128` | `Result<(), SpendingPolicyError>` | admin | Set or replace a spend limit for account/asset |
+| `get_policy` | `account: Address, asset: Address` | `Result<SpendLimit, SpendingPolicyError>` | none | Return the spend limit for account/asset |
+| `check_spend` | `account: Address, asset: Address, amount: i128` | `Result<(), SpendingPolicyError>` | none | Check if amount is within the policy limit |
+
+### Events
+
+| Topic | Data | Condition |
+|---|---|---|
+| `init` | `admin: Address` | Contract initialized |
+| `lmt_set` | `(account: Address, asset: Address, limit: i128)` | Spend limit set |
+| `chk_ok` | `(account: Address, asset: Address, amount: i128)` | Spend within limit |
+| `chk_ex` | `(account: Address, asset: Address, amount: i128, limit_or_reason: i128 \| Symbol)` | Spend exceeds limit or no policy |
+
+### Errors
+
+| Variant | Code | HTTP | Description |
+|---|---|---|---|
+| `NotInitialized` | 1 | 500 | Contract not yet initialized |
+| `AlreadyInitialized` | 2 | 409 | `initialize` called more than once |
+| `Unauthorized` | 3 | 401 | Caller is not the admin |
+| `PolicyNotFound` | 4 | 404 | No spend policy for the account/asset pair |
+| `SpendLimitExceeded` | 5 | 400 | Requested spend exceeds the configured limit |
+| `InvalidInput` | 6 | 400 | Limit is not positive or spend amount is negative |
+
+---
+
 ## mux-wallet-registry
 
 Maps symbolic names (`Symbol`) to wallet addresses. One owner is set at deploy

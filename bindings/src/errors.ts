@@ -8,6 +8,7 @@ import type {
   MuxPermissionsError,
   MuxPolicyError,
   MuxRecoveryError,
+  SpendingPolicyError,
 } from "./types";
 
 export interface HttpErrorResponse {
@@ -25,7 +26,8 @@ type ContractError =
   | MuxAccountFactoryError
   | MuxRegistryError
   | MuxWalletRegistryError
-  | MuxRecoveryError;
+  | MuxRecoveryError
+  | SpendingPolicyError;
 
 /**
  * Maps contract error variants to HTTP status codes.
@@ -69,6 +71,7 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   WalletNotFound: 404,
   MetadataNotFound: 404,
   AdminNotFound: 404,
+  PolicyNotFound: 404,
 
   // Validation/Constraint errors → 400
   InvalidAmount: 400,
@@ -81,6 +84,8 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   // MuxAccountFactoryError::InvalidAccount (code 2)
   InvalidAccount: 400,
   MetadataTooLarge: 400,
+  // SpendingPolicyError::InvalidInput (code 6)
+  InvalidInput: 400,
 
   // Delegation constraint errors → 400
   TooManyPermissions: 400,
@@ -96,22 +101,13 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   LimitNotFound: 404,
 
   // Capacity limits → 409 Conflict
-  // MuxAccountError::TooManyDelegates (code 9)
   TooManyDelegates: 409,
-  // MuxAccountFactoryError::TooManyAccounts (code 3)
   TooManyAccounts: 409,
   TooManyContracts: 409,
-  TooManyDelegates: 409,
   TooManyMembers: 409,
   TooManyRoles: 409,
   TooManyWallets: 409,
   TooManySessionKeys: 409,
-
-  // MuxAccountFactoryError::MetadataNotFound (code 4)
-  MetadataNotFound: 404,
-
-  // Wallet registry not-found → 404
-  WalletNotFound: 404,
 
   // Internal/Uninitialized → 500
   NotInitialized: 500,
@@ -123,7 +119,9 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
  * Converts a contract error to an HTTP error response.
  * Unknown errors default to 500 Internal Server Error.
  */
-export function contractErrorToHttp(error: ContractError | string): HttpErrorResponse {
+export function contractErrorToHttp(
+  error: ContractError | string,
+): HttpErrorResponse {
   const errorType = String(error);
   const statusCode = ERROR_HTTP_MAP[errorType] || 500;
 
