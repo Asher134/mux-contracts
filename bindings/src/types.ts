@@ -76,7 +76,47 @@ export type MuxBatcherError =
 export type MuxDelegationError =
   | "NotADelegate"
   | "TooManyPermissions"
-  | "EmptyPermissions";
+  | "EmptyPermissions"
+  | "TooManyDelegates";
+
+/**
+ * Maps a `MuxDelegationError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `MuxDelegationError` enum in
+ * `contracts/mux-delegation/src/lib.rs` (stable ABI codes 6001–6004).
+ *
+ * Error codes used by `revoke_delegate`:
+ *   - `NotADelegate` (6001): no grant exists for the (owner, delegate) pair.
+ *
+ * @example
+ * ```ts
+ * import { muxDelegationErrorMessage } from "./types";
+ * console.log(muxDelegationErrorMessage("NotADelegate")); // "no delegate grant found for this pair"
+ * console.log(muxDelegationErrorMessage(6001));           // "no delegate grant found for this pair"
+ * ```
+ */
+export function muxDelegationErrorMessage(
+  error: MuxDelegationError | number
+): string {
+  const codeMap: Record<number, string> = {
+    6001: "no delegate grant found for this pair",
+    6002: "permission list exceeds the 64-entry cap",
+    6003: "permission list is empty; at least one permission is required",
+    6004: "owner already has 128 delegates registered",
+  };
+
+  const nameMap: Record<MuxDelegationError, number> = {
+    NotADelegate: 6001,
+    TooManyPermissions: 6002,
+    EmptyPermissions: 6003,
+    TooManyDelegates: 6004,
+  };
+
+  const code =
+    typeof error === "number" ? error : nameMap[error] ?? -1;
+  return codeMap[code] ?? "unknown error code";
+}
 
 export type MuxPermissionsError =
   | "NotInitialized"
@@ -166,6 +206,7 @@ export function muxAccountErrorMessage(
     9: "too many delegates",
     10: "reentrancy detected",
     11: "arithmetic overflow",
+    12: "too many session keys",
   };
 
   const nameMap: Record<MuxAccountError, number> = {
@@ -180,6 +221,7 @@ export function muxAccountErrorMessage(
     TooManyDelegates: 9,
     ReentrancyDetected: 10,
     ArithmeticOverflow: 11,
+    TooManySessionKeys: 12,
   };
 
   const code =
