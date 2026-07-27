@@ -84,7 +84,11 @@ export type MuxDelegationError =
  * a human-readable description.
  *
  * Mirrors the on-chain `MuxDelegationError` enum in
- * `contracts/mux-delegation/src/lib.rs` (error codes 6001–6004).
+ * `contracts/mux-delegation/src/lib.rs` (stable ABI codes 6001–6004).
+ *
+ * Relevant to the delegate permissions map (closes #407):
+ *   - `getDelegatePermissions` and `isDelegate` are read-only and do not
+ *     return errors; they return an empty list / false for unknown pairs.
  *
  * @example
  * ```ts

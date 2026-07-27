@@ -55,14 +55,13 @@ type ContractError =
  *   MetadataNotFound  (4) → 404  no metadata stored for the account
  *
  * MuxDelegation error codes (contracts/mux-delegation):
- *   NotADelegate       (6001) → 404  no grant exists for the (owner, delegate) pair
- *   TooManyPermissions (6002) → 400  permission list exceeds the 64-entry cap
- *   EmptyPermissions   (6003) → 400  at least one permission must be specified
- *   TooManyDelegates   (6004) → 409  owner already has 128 delegates registered
+ *   NotADelegate       (6001) → 404
+ *   TooManyPermissions (6002) → 400
+ *   EmptyPermissions   (6003) → 400
+ *   TooManyDelegates   (6004) → 409
  */
 export const ERROR_HTTP_MAP: Record<string, number> = {
   // Authentication/Authorization errors → 401
-  // Covers: MuxAccountError, MuxAccountFactoryError::Unauthorized (code 1)
   Unauthorized: 401,
 
   // Not Found errors → 404
@@ -85,7 +84,7 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   DelegateExpired: 400,
   EmptyBatch: 400,
   BatchTooLarge: 400,
-  InvalidAccount: 400,     // MuxAccountFactoryError (2)
+  InvalidAccount: 400,
   MetadataTooLarge: 400,
 
   // Delegation constraint errors → 400
@@ -95,15 +94,14 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
 
   // State conflict → 409
   AlreadyInitialized: 409,
-  AlreadyApproved: 409,    // MuxPermissionsError (10): approver already approved this candidate
+  AlreadyApproved: 409,
 
-  // Security guard violations → 409 Conflict (concurrent/reentrant call)
+  // Security guard violations → 409
   ReentrancyDetected: 409,
 
-  // Capacity limits → 409 Conflict
-  // MuxAccountError::TooManyDelegates (9) and MuxDelegationError::TooManyDelegates (6004)
+  // Capacity limits → 409
   TooManyDelegates: 409,
-  TooManyAccounts: 409,    // MuxAccountFactoryError (3)
+  TooManyAccounts: 409,
   TooManyContracts: 409,
   TooManyMembers: 409,
   TooManyRoles: 409,
@@ -139,5 +137,5 @@ export function isContractError(error: unknown): error is string {
   if (typeof error !== "string") {
     return false;
   }
-  return error in ERROR_HTTP_MAP || true; // Conservative: treat any string as potential error
+  return error in ERROR_HTTP_MAP || true;
 }

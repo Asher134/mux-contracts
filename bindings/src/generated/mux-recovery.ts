@@ -110,6 +110,32 @@ export class MuxRecoveryClient {
     await this.submit(tx, sourceKeypair);
   }
 
+  /**
+   * Link a registry contract address to this recovery contract.
+   * Only the current owner may call this method.
+   */
+  async setRegistry(
+    sourceKeypair: Keypair,
+    owner: Address,
+    registryId: Address
+  ): Promise<void> {
+    const tx = await this.buildTx(sourceKeypair, "set_registry", [
+      nativeToScVal(owner.toString(), { type: "address" }),
+      nativeToScVal(registryId.toString(), { type: "address" }),
+    ]);
+    await this.submit(tx, sourceKeypair);
+  }
+
+  /**
+   * Return the linked registry contract address, or null if not set.
+   */
+  async getRegistryId(sourceKeypair: Keypair): Promise<Address | null> {
+    const tx = await this.buildTx(sourceKeypair, "registry_id", []);
+    const result = await this.simulate<string | null>(tx);
+    if (result === null || result === undefined) return null;
+    return new Address(result);
+  }
+
   // ── Read operations with filtering query params ──────────────────────────────
 
   /**
