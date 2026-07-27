@@ -21,13 +21,13 @@ The core contracts in the Mux Protocol workspace include:
 graph TD
     User([User / DApp]) --> Batcher[mux-batcher]
     User --> Factory[mux-account-factory]
-    
+
     Factory -->|Deploys & Initializes| Account[mux-account]
-    
+
     Batcher -->|Executes batch| Account
-    
+
     Account -->|Validates Actions| Permissions[mux-permissions]
-    
+
     Account -->|Looks up Modules| Registry[mux-registry]
     Factory -->|Registers| Registry
     Permissions -.->|Verified via| Registry
@@ -43,4 +43,6 @@ graph TD
 2. **Execution**: Transactions can be sent individually or batched via the `mux-batcher` to optimize gas and latency.
 3. **Validation**: The `mux-account` routes calls through `mux-permissions` to ensure the caller has the appropriate rights.
 4. **Registry**: The `mux-registry` acts as the source of truth for protocol-wide configurations, valid plugin implementations, and discovery.
+5. **Recovery**: `mux-recovery` enables guardian-initiated ownership transfer with a timelock cancellation window. The contract can be linked to a `mux-registry` entry for auditability (see [`docs/recovery-trust-model.md`](recovery-trust-model.md)).
+6. **Delegation**: `mux-delegation` allows account owners to grant scoped permissions to delegate addresses, enabling fine-grained access control without transferring ownership.
 
