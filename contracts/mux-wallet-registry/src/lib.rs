@@ -36,7 +36,8 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
+    Symbol, Vec,
 };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -95,6 +96,18 @@ const MAX_WALLETS: u32 = 128;
 const TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
+// ── Event helpers ─────────────────────────────────────────────────────────────
+
+/// Publish a contract event with the `mux_wreg` topic prefix.
+///
+/// # Arguments
+/// * `action` – short symbol identifying the action (≤ 8 chars).
+/// * `data`   – event payload; serialised as the event body.
+fn emit(env: &Env, action: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events()
+        .publish((symbol_short!("mux_wreg"), action), data);
+}
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 /// Named wallet address registry.
@@ -124,6 +137,7 @@ impl MuxWalletRegistry {
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
         Self::extend_ttl(&env);
+        emit(&env, symbol_short!("init"), owner);
         Ok(())
     }
 
@@ -158,8 +172,9 @@ impl MuxWalletRegistry {
 
         env.storage()
             .instance()
-            .set(&DataKey::Wallet(name), &wallet);
+            .set(&DataKey::Wallet(name.clone()), &wallet);
         Self::extend_ttl(&env);
+        emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Ok(())
     }
 
@@ -178,7 +193,19 @@ impl MuxWalletRegistry {
             .ok_or(WalletRegistryError::WalletNotFound)
     }
 
-    /// Register (or update) a wallet with metadata. Owner only.
+    /// Register or overwrite a wallet address with descriptive metadata.
+    ///
+    /// Only the owner recorded at initialisation may call this method;
+    /// the owner address must authorise the invocation. Calling this with
+    /// an existing `name` silently replaces the previous entry and its metadata.
+    ///
+    /// Emits a `wlt_regm` event with `(name, wallet)` as the payload on
+    /// successful registration.
+    ///
+    /// # Errors
+    /// - [`WalletRegistryError::NotInitialized`] if `initialize` was never called.
+    /// - [`WalletRegistryError::TooManyWallets`] (code 5) if the wallet cap
+    ///   (128) has been reached.
     pub fn register_wallet_with_metadata(
         env: Env,
         name: Symbol,
@@ -207,12 +234,24 @@ impl MuxWalletRegistry {
         let meta = WalletMetadata { label, description };
         env.storage()
             .instance()
-            .set(&DataKey::Metadata(name), &meta);
+            .set(&DataKey::Metadata(name.clone()), &meta);
         Self::extend_ttl(&env);
+        emit(&env, symbol_short!("wlt_regm"), (name, wallet));
         Ok(())
     }
 
     /// Return the metadata for a wallet registered under `name`.
+    ///
+    /// This is a read-only method; no authorisation is required.
+    ///
+    /// Only wallets registered via [`Self::register_wallet_with_metadata`] have
+    /// metadata. Wallets registered via [`Self::register_wallet`] alone do not,
+    /// and this method will return [`WalletRegistryError::WalletNotFound`] for
+    /// those names.
+    ///
+    /// # Errors
+    /// - [`WalletRegistryError::WalletNotFound`] if no wallet with metadata is
+    ///   registered under `name`.
     pub fn get_metadata(env: Env, name: Symbol) -> Result<WalletMetadata, WalletRegistryError> {
         env.storage()
             .instance()
@@ -222,8 +261,9 @@ impl MuxWalletRegistry {
 
     /// List all registered wallet names.
     ///
-    /// Returns an empty vec if `initialize` has not been called yet.
-    /// No authorisation is required.
+    /// Returns an empty [`Vec`] when no wallets have been registered *or* when
+    /// the contract has not yet been initialised (i.e. [`Self::initialize`] has
+    /// not been called). No authorisation is required.
     pub fn list_wallets(env: Env) -> Vec<Symbol> {
         env.storage()
             .instance()
@@ -559,5 +599,89 @@ mod tests {
         let meta = client.get_metadata(&name);
         assert_eq!(meta.label, label);
         assert_eq!(meta.description, desc);
+    }
+
+    // ── Event emission tests ───────────────────────────────────────────────────
+
+    /// `initialize` must emit an `init` event with the owner address as data.
+    #[test]
+    fn test_init_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        client.initialize(&owner);
+
+        let events = env.events().all();
+        assert!(!events.is_empty(), "expected at least one event");
+        let action = topic_action(&env, &events, 0);
+        assert_eq!(action, symbol_short!("init"));
+    }
+
+    /// `register_wallet` must emit a `wlt_reg` event with `(name, wallet)` as
+    /// the data payload.
+    #[test]
+    fn test_register_wallet_emits_event() {
+        let (env, client, _) = setup();
+        // Clear the events emitted by setup() so we only see register_wallet's event.
+        let name = symbol_short!("alice");
+        let wallet = Address::generate(&env);
+        client.register_wallet(&name, &wallet);
+
+        let events = env.events().all();
+        // The last event should be the wlt_reg event (init was emitted first by setup).
+        let last_idx = events.len() - 1;
+        let action = topic_action(&env, &events, last_idx);
+        assert_eq!(action, symbol_short!("wlt_reg"));
+    }
+
+    /// `register_wallet_with_metadata` must emit a `wlt_regm` event with
+    /// `(name, wallet)` as the data payload.
+    #[test]
+    fn test_register_wallet_with_metadata_emits_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("bob");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Bob's Wallet");
+        let desc = String::from_str(&env, "Test wallet");
+        client.register_wallet_with_metadata(&name, &wallet, &label, &desc);
+
+        let events = env.events().all();
+        let last_idx = events.len() - 1;
+        let action = topic_action(&env, &events, last_idx);
+        assert_eq!(action, symbol_short!("wlt_regm"));
+    }
+
+    // ── list_wallets tests ─────────────────────────────────────────────────────
+
+    /// `list_wallets` on a completely fresh (uninitialised) contract must return
+    /// an empty vec rather than panicking.
+    #[test]
+    fn test_list_wallets_returns_empty_before_init() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let names = client.list_wallets();
+        assert_eq!(names.len(), 0);
+    }
+
+    /// Registering three wallets must result in all three names appearing in
+    /// the `list_wallets` result (order is insertion order).
+    #[test]
+    fn test_list_wallets_returns_all_registered() {
+        let (env, client, _) = setup();
+        let name_a = symbol_short!("alpha");
+        let name_b = symbol_short!("beta");
+        let name_c = symbol_short!("gamma");
+        client.register_wallet(&name_a, &Address::generate(&env));
+        client.register_wallet(&name_b, &Address::generate(&env));
+        client.register_wallet(&name_c, &Address::generate(&env));
+
+        let names = client.list_wallets();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&name_a));
+        assert!(names.contains(&name_b));
+        assert!(names.contains(&name_c));
     }
 }
