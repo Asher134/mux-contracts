@@ -12,8 +12,8 @@ The core contracts in the Mux Protocol workspace include:
 - **mux-permissions**: A module for defining and enforcing role-based access control and granular permissions within Mux accounts.
 - **mux-registry**: A central registry for discovering, verifying, and indexing components, accounts, and valid module implementations.
 - **mux-wallet-registry**: A named address book that maps symbolic names to wallet addresses. Only a designated owner may write entries; reads are permissionless.
-- **mux-recovery**: Guardian-initiated account recovery with a mandatory 24-hour timelock. Allows pre-registered guardians to transfer ownership to a new address while giving the current owner a cancellation window. Optionally linked to a `mux-registry` deployment for auditability.
-- **mux-delegation**: Scoped permission delegation from an owner to one or more delegate addresses. Supports up to 128 delegates per owner and 64 permissions per delegate, with full enumeration and per-permission checks.
+- **mux-recovery**: Social recovery contract for `mux-account` owners. Pre-registered guardians can transfer ownership to a new address after a mandatory timelock delay.
+- **mux-delegation**: Delegation contract enabling owners to grant time-bounded or permission-scoped signing authority to delegate keys.
 
 ## Diagram
 
@@ -33,9 +33,8 @@ graph TD
     Permissions -.->|Verified via| Registry
     Account -->|Resolves wallets| WalletRegistry[mux-wallet-registry]
 
-    Recovery[mux-recovery] -->|Links to| Registry
-    Account -->|Delegates to| Delegation[mux-delegation]
-    User -->|Initiates recovery via| Recovery
+    Recovery[mux-recovery] -->|Transfers ownership| Account
+    Delegation[mux-delegation] -->|Grants delegate auth| Account
 ```
 
 ## System Flow

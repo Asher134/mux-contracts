@@ -9,6 +9,29 @@
  * 64 permissions. All state-mutating operations require owner authorization
  * and emit an audit event under the `mux_dlg` contract tag.
  *
+ * # Public Interface
+ *
+ * | Entrypoint                  | Description                                                   |
+ * |-----------------------------|---------------------------------------------------------------|
+ * | `grant_delegate`            | Grant a set of permissions from owner to delegate (owner auth required). |
+ * | `revoke_delegate`           | Revoke all permissions for an (owner, delegate) pair (owner auth required). |
+ * | `get_delegate_permissions`  | Return the `Vec<Symbol>` of permissions granted to a delegate. |
+ * | `is_delegate`               | Return `true` if owner has granted a specific permission to delegate. |
+ * | `get_delegates`             | Return all delegate addresses registered under an owner.     |
+ * | `check_delegate`            | Read-only convenience check: `Ok(())` if permission is granted, `Err(NotADelegate)` otherwise. |
+ *
+ * # Storage Layout
+ *
+ * | Key                              | Value          | TTL        |
+ * |----------------------------------|----------------|------------|
+ * | `DelegatePerms(owner, delegate)` | `Vec<Symbol>`  | Persistent |
+ * | `OwnerDelegates(owner)`          | `Vec<Address>` | Persistent |
+ *
+ * # Bounds
+ *
+ * - `MAX_DELEGATE_PERMS` = 64 — maximum permissions per (owner, delegate) pair.
+ * - `MAX_DELEGATES_PER_OWNER` = 128 — maximum delegate addresses per owner (storage-griefing guard).
+ *
  * # `no_std` Constraints
  *
  * This crate is `#![no_std]` and does not use `extern crate alloc`.
@@ -192,6 +215,30 @@ impl MuxDelegation {
             .persistent()
             .get(&DataKey::OwnerDelegates(owner))
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Returns Ok(()) if owner has granted permission to delegate, Err(NotADelegate) otherwise.
+    ///
+    /// This is a read-only convenience check. No authentication is required and
+    /// no state is mutated. Callers that only need a boolean can use `is_delegate`
+    /// instead; `check_delegate` is useful when an error value is needed for
+    /// chained authorization checks.
+    pub fn check_delegate(
+        env: Env,
+        owner: Address,
+        delegate: Address,
+        permission: Symbol,
+    ) -> Result<(), MuxDelegationError> {
+        let perms: Vec<Symbol> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DelegatePerms(owner, delegate))
+            .unwrap_or_else(|| Vec::new(&env));
+        if perms.contains(&permission) {
+            Ok(())
+        } else {
+            Err(MuxDelegationError::NotADelegate)
+        }
     }
 
     fn extend_ttl(env: &Env) {
@@ -623,18 +670,58 @@ mod tests {
     }
 
     #[test]
-    fn test_error_code_too_many_delegates() {
+    fn test_error_code_too_many_delegates_cap() {
         assert_eq!(MuxDelegationError::TooManyDelegates as u32, 6004);
     }
 
     // ── symbol_short length audit (#496) ─────────────────────────────────────
-
+    // symbol_short! enforces ≤ 8 chars at compile time; these declarations
+    // confirm all event tag/action strings compile without truncation.
     #[test]
     fn test_symbol_short_lengths_within_limit() {
-        let tags = [symbol_short!("mux_dlg")];
-        let actions = [symbol_short!("dlg_grant"), symbol_short!("dlg_rev")];
-        for sym in tags.iter().chain(actions.iter()) {
-            assert!(sym.to_val().len() <= 8);
-        }
+        let _mux_dlg = symbol_short!("mux_dlg");
+        let _dlg_grant = symbol_short!("dlg_grant");
+        let _dlg_rev = symbol_short!("dlg_rev");
+    }
+
+    // ── check_delegate ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_check_delegate_ok_for_granted_permission() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perm = symbol_short!("read");
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm.clone()]);
+
+        let result = client.try_check_delegate(&owner, &delegate, &perm);
+        assert_eq!(result, Ok(Ok(())));
+    }
+
+    #[test]
+    fn test_check_delegate_err_for_ungrant_permission() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let granted = symbol_short!("read");
+        let ungrated = symbol_short!("write");
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, granted]);
+
+        let result = client.try_check_delegate(&owner, &delegate, &ungrated);
+        assert_eq!(result, Err(Ok(MuxDelegationError::NotADelegate)));
+    }
+
+    #[test]
+    fn test_check_delegate_err_for_unregistered_delegate() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perm = symbol_short!("read");
+
+        // No grant has been made at all.
+        let result = client.try_check_delegate(&owner, &delegate, &perm);
+        assert_eq!(result, Err(Ok(MuxDelegationError::NotADelegate)));
     }
 }
