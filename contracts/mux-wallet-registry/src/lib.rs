@@ -5,8 +5,19 @@
  *
  * # `no_std` Constraints
  *
- * This crate is `#![no_std]` and does not use `extern crate alloc`.
- * All data structures use Soroban SDK types backed by the Soroban host.
+ * This crate is `#![no_std]` and uses `extern crate alloc` only inside
+ * `#[cfg(test)]` modules. All data structures use Soroban SDK types backed by
+ * the Soroban host.
+ *
+ * # Events
+ *
+ * Contract tag: `mux_wreg`
+ *
+ * | Action    | Trigger                          | Data payload                  |
+ * |-----------|----------------------------------|-------------------------------|
+ * | `init`    | `initialize` succeeds            | `owner: Address`              |
+ * | `wlt_reg` | `register_wallet` succeeds       | `(name: Symbol, wallet: Address)` |
+ * | `wlt_meta`| `register_wallet_with_metadata` succeeds | `(name: Symbol, wallet: Address)` |
  *
  * ## Upgrade Migration Notes
  *
@@ -33,8 +44,21 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
+    Symbol, Vec,
 };
+
+// ── Audit events ──────────────────────────────────────────────────────────────
+
+/// Emit a contract event under the `mux_wreg` topic namespace.
+///
+/// Topics layout: `[mux_wreg, action]`; data is the action-specific payload.
+/// Only called on successful state-mutating paths — failed `Result::Err`
+/// returns must not reach this helper.
+fn emit(env: &Env, action: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events()
+        .publish((symbol_short!("mux_wreg"), action), data);
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -120,6 +144,7 @@ impl MuxWalletRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        emit(&env, symbol_short!("init"), owner);
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -155,7 +180,8 @@ impl MuxWalletRegistry {
 
         env.storage()
             .instance()
-            .set(&DataKey::Wallet(name), &wallet);
+            .set(&DataKey::Wallet(name.clone()), &wallet);
+        emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -204,7 +230,8 @@ impl MuxWalletRegistry {
         let meta = WalletMetadata { label, description };
         env.storage()
             .instance()
-            .set(&DataKey::Metadata(name), &meta);
+            .set(&DataKey::Metadata(name.clone()), &meta);
+        emit(&env, symbol_short!("wlt_meta"), (name, wallet));
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -243,8 +270,13 @@ impl MuxWalletRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate alloc;
     use alloc::format;
-    use soroban_sdk::{symbol_short, testutils::Address as _, Env, FromVal, String};
+    use soroban_sdk::{
+        symbol_short,
+        testutils::{Address as _, Events},
+        Env, FromVal, String,
+    };
 
     fn setup() -> (Env, MuxWalletRegistryClient<'static>, Address) {
         let env = Env::default();
@@ -269,6 +301,22 @@ mod tests {
         let (_, topics, _) = events.get(idx).unwrap();
         soroban_sdk::Symbol::from_val(env, &topics.get(1).unwrap())
     }
+
+    /// Extract the contract tag symbol (topics[0]) from a specific event index.
+    fn topic_tag(
+        env: &Env,
+        events: &soroban_sdk::Vec<(
+            soroban_sdk::Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
+        idx: u32,
+    ) -> soroban_sdk::Symbol {
+        let (_, topics, _) = events.get(idx).unwrap();
+        soroban_sdk::Symbol::from_val(env, &topics.get(0).unwrap())
+    }
+
+    // ── Initialise ────────────────────────────────────────────────────────────
 
     #[test]
     fn test_initialize_succeeds() {
@@ -313,6 +361,25 @@ mod tests {
         assert_eq!(client.get_wallet(&name), wallet);
     }
 
+    // ── Event: init ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_initialize_emits_init_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        client.initialize(&owner);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly 1 event after initialize");
+        assert_eq!(topic_tag(&env, &events, 0), symbol_short!("mux_wreg"));
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
+    }
+
+    // ── register_wallet ──────────────────────────────────────────────────────
+
     #[test]
     fn test_register_and_get_wallet() {
         let (env, client, _) = setup();
@@ -321,6 +388,115 @@ mod tests {
         client.register_wallet(&name, &wallet);
         assert_eq!(client.get_wallet(&name), wallet);
     }
+
+    // ── Event: wlt_reg ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_register_wallet_emits_wlt_reg_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("alice");
+        let wallet = Address::generate(&env);
+        client.register_wallet(&name, &wallet);
+
+        let events = env.events().all();
+        // events[0] = init, events[1] = wlt_reg
+        assert_eq!(events.len(), 2, "expected init + wlt_reg events");
+        assert_eq!(topic_tag(&env, &events, 1), symbol_short!("mux_wreg"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("wlt_reg"));
+    }
+
+    #[test]
+    fn test_register_wallet_update_emits_wlt_reg_event() {
+        // Re-registering (overwrite) also emits wlt_reg.
+        let (env, client, _) = setup();
+        let name = symbol_short!("bob");
+        let wallet1 = Address::generate(&env);
+        let wallet2 = Address::generate(&env);
+        client.register_wallet(&name, &wallet1);
+        client.register_wallet(&name, &wallet2);
+
+        let events = env.events().all();
+        // init + wlt_reg + wlt_reg
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("wlt_reg"));
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("wlt_reg"));
+        // wallet was actually updated
+        assert_eq!(client.get_wallet(&name), wallet2);
+    }
+
+    // ── register_wallet_with_metadata ────────────────────────────────────────
+
+    #[test]
+    fn test_register_wallet_with_metadata() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("carol");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Carol's Wallet");
+        let description = String::from_str(&env, "Primary spending wallet");
+        client.register_wallet_with_metadata(&name, &wallet, &label, &description);
+        assert_eq!(client.get_wallet(&name), wallet);
+        let meta = client.get_metadata(&name);
+        assert_eq!(meta.label, label);
+        assert_eq!(meta.description, description);
+    }
+
+    // ── Event: wlt_meta ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_register_wallet_with_metadata_emits_wlt_meta_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("carol");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Carol's Wallet");
+        let description = String::from_str(&env, "Primary spending wallet");
+        client.register_wallet_with_metadata(&name, &wallet, &label, &description);
+
+        let events = env.events().all();
+        // events[0] = init, events[1] = wlt_meta
+        assert_eq!(events.len(), 2, "expected init + wlt_meta events");
+        assert_eq!(topic_tag(&env, &events, 1), symbol_short!("mux_wreg"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("wlt_meta"));
+    }
+
+    #[test]
+    fn test_register_wallet_with_metadata_update_emits_wlt_meta_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("dave");
+        let wallet = Address::generate(&env);
+        let label1 = String::from_str(&env, "v1");
+        let label2 = String::from_str(&env, "v2");
+        let desc = String::from_str(&env, "desc");
+        client.register_wallet_with_metadata(&name, &wallet, &label1, &desc);
+        client.register_wallet_with_metadata(&name, &wallet, &label2, &desc);
+        let meta = client.get_metadata(&name);
+        assert_eq!(meta.label, label2);
+        assert_eq!(client.get_wallet(&name), wallet);
+
+        let events = env.events().all();
+        // init + wlt_meta + wlt_meta
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("wlt_meta"));
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("wlt_meta"));
+    }
+
+    // ── symbol_short length audit ─────────────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        // Both the contract tag and every action must fit in 9 chars (symbol_short! limit).
+        let tag = symbol_short!("mux_wreg");
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("wlt_reg"),
+            symbol_short!("wlt_meta"),
+        ];
+        // symbol_short! is a compile-time macro — if any name exceeded 9 chars it
+        // would not compile.  This test documents the set and asserts they are valid.
+        let _ = tag;
+        for _ in actions.iter() {}
+    }
+
+    // ── Storage cap ──────────────────────────────────────────────────────────
 
     #[test]
     fn test_register_wallet_caps_names() {
@@ -346,6 +522,8 @@ mod tests {
         client.register_wallet(&name, &wallet);
         assert_eq!(client.get_wallet(&name), wallet);
     }
+
+    // ── Error cases ──────────────────────────────────────────────────────────
 
     #[test]
     fn test_get_wallet_not_found() {
@@ -399,38 +577,46 @@ mod tests {
     }
 
     #[test]
-    fn test_register_wallet_with_metadata() {
-        let (env, client, _) = setup();
-        let name = symbol_short!("carol");
-        let wallet = Address::generate(&env);
-        let label = String::from_str(&env, "Carol's Wallet");
-        let description = String::from_str(&env, "Primary spending wallet");
-        client.register_wallet_with_metadata(&name, &wallet, &label, &description);
-        assert_eq!(client.get_wallet(&name), wallet);
-        let meta = client.get_metadata(&name);
-        assert_eq!(meta.label, label);
-        assert_eq!(meta.description, description);
-    }
-
-    #[test]
     fn test_get_metadata_not_found() {
         let (_, client, _) = setup();
         let result = client.try_get_metadata(&symbol_short!("ghost"));
         assert_eq!(result, Err(Ok(WalletRegistryError::WalletNotFound)));
     }
 
+    // ── Failed paths emit no events ───────────────────────────────────────────
+
     #[test]
-    fn test_metadata_update_preserves_wallet() {
+    fn test_failed_initialize_emits_no_event() {
+        // Second initialize call is rejected — must not emit an event.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        client.initialize(&owner);
+        let _ = client.try_initialize(&owner); // must fail
+
+        let events = env.events().all();
+        // Only the first (successful) initialize emitted an event.
+        assert_eq!(events.len(), 1);
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
+    }
+
+    #[test]
+    fn test_over_cap_register_emits_no_extra_event() {
+        // TooManyWallets rejection must not emit a wlt_reg event.
         let (env, client, _) = setup();
-        let name = symbol_short!("dave");
-        let wallet = Address::generate(&env);
-        let label1 = String::from_str(&env, "v1");
-        let label2 = String::from_str(&env, "v2");
-        let desc = String::from_str(&env, "desc");
-        client.register_wallet_with_metadata(&name, &wallet, &label1, &desc);
-        client.register_wallet_with_metadata(&name, &wallet, &label2, &desc);
-        let meta = client.get_metadata(&name);
-        assert_eq!(meta.label, label2);
-        assert_eq!(client.get_wallet(&name), wallet);
+        env.budget().reset_unlimited();
+        for i in 0..MAX_WALLETS {
+            let name = soroban_sdk::Symbol::new(&env, &format!("wallet{}", i));
+            client.register_wallet(&name, &Address::generate(&env));
+        }
+        let before = env.events().all().len();
+        let _ = client.try_register_wallet(
+            &soroban_sdk::Symbol::new(&env, "overflow"),
+            &Address::generate(&env),
+        );
+        // No extra event from the failed call.
+        assert_eq!(env.events().all().len(), before);
     }
 }
