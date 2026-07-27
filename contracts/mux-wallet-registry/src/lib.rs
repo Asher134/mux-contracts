@@ -509,6 +509,182 @@ mod tests {
         );
     }
 
+    // ── Unauthorized owner tests ───────────────────────────────────────────────
+    //
+    // These tests verify that `register_wallet` and `register_wallet_with_metadata`
+    // reject callers who have not been authorised as the declared owner.
+    // Following the pattern used across mux-* contracts (see mux-account-factory
+    // and mux-delegation), they deliberately omit `mock_all_auths` so that
+    // `require_auth` rejects at the host level, surfacing as `Err(..)` from
+    // `try_*`.  State mutation must not occur on a rejected call.
+
+    /// `register_wallet` without any authorised signer must be rejected.
+    /// No wallet entry or name list entry may be written.
+    #[test]
+    fn test_register_wallet_requires_owner_auth() {
+        // Initialise with mocked auth, then attempt register_wallet without mock.
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &cid);
+        let owner = Address::generate(&env);
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&owner);
+        }
+
+        // No mock_all_auths — require_auth must reject.
+        let name = symbol_short!("alice");
+        let wallet = Address::generate(&env);
+        let result = client.try_register_wallet(&name, &wallet);
+        assert!(
+            result.is_err(),
+            "register_wallet must be rejected when owner auth is absent"
+        );
+
+        // No wallet entry must have been written.
+        assert!(
+            client.try_get_wallet(&name).is_err(),
+            "no wallet must be stored after a rejected register_wallet"
+        );
+        // Names list must still be empty.
+        assert_eq!(
+            client.list_wallets().len(),
+            0,
+            "names list must remain empty after a rejected register_wallet"
+        );
+    }
+
+    /// `register_wallet_with_metadata` without any authorised signer must be
+    /// rejected.  No wallet, metadata, or name list entry may be written.
+    #[test]
+    fn test_register_wallet_with_metadata_requires_owner_auth() {
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &cid);
+        let owner = Address::generate(&env);
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&owner);
+        }
+
+        let name = symbol_short!("bob");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Bob's Wallet");
+        let desc = String::from_str(&env, "primary wallet");
+
+        let result = client.try_register_wallet_with_metadata(&name, &wallet, &label, &desc);
+        assert!(
+            result.is_err(),
+            "register_wallet_with_metadata must be rejected when owner auth is absent"
+        );
+
+        assert!(
+            client.try_get_wallet(&name).is_err(),
+            "no wallet must be stored after a rejected register_wallet_with_metadata"
+        );
+        assert!(
+            client.try_get_metadata(&name).is_err(),
+            "no metadata must be stored after a rejected register_wallet_with_metadata"
+        );
+        assert_eq!(
+            client.list_wallets().len(),
+            0,
+            "names list must remain empty after a rejected register_wallet_with_metadata"
+        );
+    }
+
+    /// A non-owner caller must not be able to register wallets.
+    /// The owner key is present but `require_auth` must reject the wrong signer.
+    #[test]
+    fn test_register_wallet_rejects_non_owner_caller() {
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &cid);
+        let owner = Address::generate(&env);
+
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&owner);
+        }
+
+        // Attempt register_wallet without a mocked signer — host rejects.
+        let name = symbol_short!("carol");
+        let wallet = Address::generate(&env);
+        let result = client.try_register_wallet(&name, &wallet);
+        assert!(
+            result.is_err(),
+            "register_wallet must reject a non-owner caller"
+        );
+
+        assert!(client.try_get_wallet(&name).is_err());
+        assert_eq!(client.list_wallets().len(), 0);
+    }
+
+    /// A non-owner caller must not be able to register wallets with metadata.
+    #[test]
+    fn test_register_wallet_with_metadata_rejects_non_owner_caller() {
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &cid);
+        let owner = Address::generate(&env);
+
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&owner);
+        }
+
+        let name = symbol_short!("dave");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Dave");
+        let desc = String::from_str(&env, "desc");
+
+        let result = client.try_register_wallet_with_metadata(&name, &wallet, &label, &desc);
+        assert!(
+            result.is_err(),
+            "register_wallet_with_metadata must reject a non-owner caller"
+        );
+
+        assert!(client.try_get_wallet(&name).is_err());
+        assert!(client.try_get_metadata(&name).is_err());
+        assert_eq!(client.list_wallets().len(), 0);
+    }
+
+    /// An unauthorized `register_wallet` must not affect a previously-authorized
+    /// registration in a separate env — isolation check.
+    #[test]
+    fn test_unauthorized_register_wallet_does_not_affect_other_envs() {
+        // Authorized env: register one wallet legitimately.
+        let env_auth = Env::default();
+        env_auth.mock_all_auths();
+        let cid_auth = env_auth.register_contract(None, MuxWalletRegistry);
+        let c_auth = MuxWalletRegistryClient::new(&env_auth, &cid_auth);
+        let owner_auth = Address::generate(&env_auth);
+        c_auth.initialize(&owner_auth);
+        let name_auth = symbol_short!("alice");
+        let wallet_auth = Address::generate(&env_auth);
+        c_auth.register_wallet(&name_auth, &wallet_auth);
+        assert_eq!(c_auth.list_wallets().len(), 1);
+
+        // Unauthorized env: attempt without mock_all_auths.
+        let env_unauth = Env::default();
+        let cid_unauth = env_unauth.register_contract(None, MuxWalletRegistry);
+        let c_unauth = MuxWalletRegistryClient::new(&env_unauth, &cid_unauth);
+        let owner_unauth = Address::generate(&env_unauth);
+        {
+            let _guard = env_unauth.mock_all_auths();
+            c_unauth.initialize(&owner_unauth);
+        }
+        let name_unauth = symbol_short!("bob");
+        let wallet_unauth = Address::generate(&env_unauth);
+        let result = c_unauth.try_register_wallet(&name_unauth, &wallet_unauth);
+        assert!(result.is_err());
+        assert_eq!(c_unauth.list_wallets().len(), 0);
+
+        // Original authorized env must be unaffected.
+        assert_eq!(c_auth.list_wallets().len(), 1);
+        assert!(c_auth.try_get_wallet(&name_auth).is_ok());
+    }
+
     /// get_metadata on a completely uninitialized contract returns WalletNotFound
     /// (no auth required — the Metadata key is simply absent).
     #[test]

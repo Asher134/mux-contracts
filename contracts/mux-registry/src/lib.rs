@@ -456,6 +456,249 @@ mod tests {
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
 
+    // ── Unauthorized admin tests ───────────────────────────────────────────────
+    //
+    // These tests verify that `register` and `register_with_metadata` reject
+    // callers who have not been authorised as the declared admin.  Following
+    // the pattern used across mux-* contracts (see mux-account-factory and
+    // mux-delegation), they deliberately omit `mock_all_auths` so that
+    // `require_auth` rejects the call at the host level, surfacing as
+    // `Err(..)` from `try_*`.  State mutation and event emission must not
+    // occur on a rejected call.
+
+    /// `register` without any authorised signer must be rejected at the host
+    /// level.  No version entry or name list entry may be written.
+    #[test]
+    fn test_register_requires_admin_auth() {
+        use soroban_sdk::testutils::Events;
+        // No mock_all_auths — require_auth must reject.
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        // Initialize with auth mocked just for this one call.
+        {
+            let env_init = Env::default();
+            env_init.mock_all_auths();
+            let cid = env_init.register_contract(None, MuxRegistry);
+            let c = MuxRegistryClient::new(&env_init, &cid);
+            let admin = Address::generate(&env_init);
+            c.initialize(&admin);
+        }
+
+        // Use a separate, properly initialised contract in its own env so
+        // require_auth fires on the register call (not on initialize).
+        let env2 = Env::default();
+        // Initialize with mocked auth.
+        let cid2 = env2.register_contract(None, MuxRegistry);
+        let c2 = MuxRegistryClient::new(&env2, &cid2);
+        let admin2 = Address::generate(&env2);
+        env2.mock_all_auths();
+        c2.initialize(&admin2);
+        env2.mock_all_auths_allowing_non_root_auth(); // clear mock; non-root denies register
+
+        // Use a clean env (no mocks) for the unauthorized register attempt.
+        let env3 = Env::default();
+        let cid3 = env3.register_contract(None, MuxRegistry);
+        let c3 = MuxRegistryClient::new(&env3, &cid3);
+        let admin3 = Address::generate(&env3);
+        // Initialise so Admin key is present (require_admin can find it).
+        {
+            let _guard = env3.mock_all_auths();
+            c3.initialize(&admin3);
+        }
+        // Now attempt register without mock — require_auth on admin3 must reject.
+        let name = symbol_short!("account");
+        let version = String::from_str(&env3, "1.0.0");
+        let result = c3.try_register(&name, &version);
+        assert!(
+            result.is_err(),
+            "register must be rejected when admin auth is absent"
+        );
+
+        // No version entry must have been written.
+        assert!(
+            c3.try_get_version(&name).is_err(),
+            "no version must be stored after a rejected register"
+        );
+        // Names list must still be empty.
+        assert_eq!(
+            c3.list_contracts().len(),
+            0,
+            "names list must remain empty after a rejected register"
+        );
+        // No events must have been emitted.
+        assert_eq!(
+            env3.events().all().len(),
+            0,
+            "no events must be emitted after a rejected register"
+        );
+    }
+
+    /// `register_with_metadata` without any authorised signer must be rejected.
+    /// No version, metadata, or name list entry may be written.
+    #[test]
+    fn test_register_with_metadata_requires_admin_auth() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        // Initialise so Admin key is present.
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+        // Attempt register_with_metadata without any auth mock.
+        let name = symbol_short!("batcher");
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Batcher contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository =
+            String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+
+        let result = client.try_register_with_metadata(
+            &name,
+            &version,
+            &description,
+            &author,
+            &repository,
+        );
+        assert!(
+            result.is_err(),
+            "register_with_metadata must be rejected when admin auth is absent"
+        );
+
+        // No version entry must have been written.
+        assert!(
+            client.try_get_version(&name).is_err(),
+            "no version must be stored after a rejected register_with_metadata"
+        );
+        // No metadata entry must have been written.
+        assert!(
+            client.try_get_metadata(&name).is_err(),
+            "no metadata must be stored after a rejected register_with_metadata"
+        );
+        // Names list must still be empty.
+        assert_eq!(
+            client.list_contracts().len(),
+            0,
+            "names list must remain empty after a rejected register_with_metadata"
+        );
+        // No events must have been emitted (init event from {_guard} env is gone; this env only).
+        assert_eq!(
+            env.events().all().len(),
+            0,
+            "no events must be emitted after a rejected register_with_metadata"
+        );
+    }
+
+    /// A non-admin caller (different address from the stored admin) must not be
+    /// able to register contracts.  The admin key is present but `require_auth`
+    /// must reject the wrong signer.
+    #[test]
+    fn test_register_rejects_non_admin_caller() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        let _attacker = Address::generate(&env);
+
+        // Initialise legitimately.
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+
+        // Attempt to register from env with no mocked signer.
+        let name = symbol_short!("perm");
+        let version = String::from_str(&env, "3.0.0");
+        let result = client.try_register(&name, &version);
+        assert!(
+            result.is_err(),
+            "register must reject a non-admin caller"
+        );
+
+        assert!(client.try_get_version(&name).is_err());
+        assert_eq!(client.list_contracts().len(), 0);
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    /// A non-admin caller must not be able to register contracts with metadata.
+    #[test]
+    fn test_register_with_metadata_rejects_non_admin_caller() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+
+        let name = symbol_short!("policy");
+        let version = String::from_str(&env, "2.0.0");
+        let description = String::from_str(&env, "Policy contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository =
+            String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+
+        let result = client.try_register_with_metadata(
+            &name,
+            &version,
+            &description,
+            &author,
+            &repository,
+        );
+        assert!(
+            result.is_err(),
+            "register_with_metadata must reject a non-admin caller"
+        );
+
+        assert!(client.try_get_version(&name).is_err());
+        assert!(client.try_get_metadata(&name).is_err());
+        assert_eq!(client.list_contracts().len(), 0);
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    /// An unauthorized `register` call must not affect a previously-authorized
+    /// registration in a separate env — isolation check.
+    #[test]
+    fn test_unauthorized_register_does_not_affect_other_envs() {
+        // Authorized env: register one contract legitimately.
+        let env_auth = Env::default();
+        env_auth.mock_all_auths();
+        let cid_auth = env_auth.register_contract(None, MuxRegistry);
+        let c_auth = MuxRegistryClient::new(&env_auth, &cid_auth);
+        let admin_auth = Address::generate(&env_auth);
+        c_auth.initialize(&admin_auth);
+        let name_auth = symbol_short!("account");
+        let version = String::from_str(&env_auth, "1.0.0");
+        c_auth.register(&name_auth, &version);
+        assert_eq!(c_auth.list_contracts().len(), 1);
+
+        // Unauthorized env: attempt without mock_all_auths.
+        let env_unauth = Env::default();
+        let cid_unauth = env_unauth.register_contract(None, MuxRegistry);
+        let c_unauth = MuxRegistryClient::new(&env_unauth, &cid_unauth);
+        let admin_unauth = Address::generate(&env_unauth);
+        {
+            let _guard = env_unauth.mock_all_auths();
+            c_unauth.initialize(&admin_unauth);
+        }
+        let name_unauth = symbol_short!("batcher");
+        let ver2 = String::from_str(&env_unauth, "1.0.0");
+        let result = c_unauth.try_register(&name_unauth, &ver2);
+        assert!(result.is_err());
+        assert_eq!(c_unauth.list_contracts().len(), 0);
+
+        // Original authorized env must be unaffected.
+        assert_eq!(c_auth.list_contracts().len(), 1);
+        assert!(c_auth.try_get_version(&name_auth).is_ok());
+    }
+
     // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
