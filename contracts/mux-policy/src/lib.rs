@@ -405,7 +405,7 @@ mod tests {
     fn test_record_spend_zero_amount_rejected() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         assert_eq!(
             client.try_record_spend(&wallet, &0_i128),
             Err(Ok(MuxPolicyError::InvalidAmount))
@@ -416,7 +416,7 @@ mod tests {
     fn test_record_spend_negative_amount_rejected() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         assert_eq!(
             client.try_record_spend(&wallet, &-5_i128),
             Err(Ok(MuxPolicyError::InvalidAmount))
@@ -449,7 +449,7 @@ mod tests {
         // Two spends of 500 each against a 1000 limit; third spend of 1 fails.
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         client.record_spend(&wallet, &500_i128);
         client.record_spend(&wallet, &500_i128);
         assert_eq!(
@@ -463,7 +463,7 @@ mod tests {
         // Spending i128::MAX when any positive limit is set must not panic.
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         let result = client.try_record_spend(&wallet, &i128::MAX);
         assert_eq!(result, Err(Ok(MuxPolicyError::LimitExceeded)));
     }
@@ -570,7 +570,7 @@ mod tests {
         env.budget().reset_unlimited();
         let wallet = Address::generate(&env);
         // Use a short window (10 ledgers) to stay within persistent TTL.
-        client.set_daily_limit(&wallet, &1000_i128, &10_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &10_u32, &None);
         client.record_spend(&wallet, &900_i128);
 
         // Advance past reset_ledger (0 + 10 = 10).
@@ -587,7 +587,7 @@ mod tests {
         env.budget().reset_unlimited();
         let wallet = Address::generate(&env);
         // Use a short window (10 ledgers) to stay within persistent TTL.
-        client.set_daily_limit(&wallet, &500_i128, &10_u32);
+        client.set_daily_limit(&wallet, &500_i128, &10_u32, &None);
         client.record_spend(&wallet, &300_i128);
 
         // Advance past the reset window (0 + 10 = 10).
@@ -607,7 +607,7 @@ mod tests {
     fn test_record_spend_invalid_amount_zero_fails() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         assert!(client.try_record_spend(&wallet, &0_i128).is_err());
     }
 
@@ -615,7 +615,9 @@ mod tests {
     fn test_record_spend_invalid_amount_negative_fails() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
+        assert!(client.try_record_spend(&wallet, &-1_i128).is_err());
+    }
         assert!(client.try_record_spend(&wallet, &-1_i128).is_err());
     }
 

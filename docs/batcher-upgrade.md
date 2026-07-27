@@ -13,14 +13,19 @@ general procedure.
 
 `mux-batcher` uses **instance storage** only:
 
-| Key               | Type   | Notes                                              |
-|-------------------|--------|----------------------------------------------------|
-| `DataKey::Executing` | `bool` | Reentrancy guard — always `false` between calls |
+| Key | Type | Notes |
+|---|---|---|
+| `DataKey::Executing` | `bool` | Reentrancy guard — set to `true` after size checks pass in `execute_batch`; removed before the function returns on every path (success and `RequiredOperationFailed` abort). Never `true` at rest between transactions. |
+| `DataKey::Meta` | `BatcherMeta` | Optional deployment metadata (`description`, `author`) set once by `set_registry_metadata`. Never mutated after initial write. |
 
-`DataKey::Executing` is set to `true` at the start of `execute_batch` and
-removed before the function returns (including on error paths). It is never
-`true` at rest between transactions. Upgrades performed between transactions
-leave no guard state to clean up.
+`DataKey::Executing` is set to `true` immediately after `EmptyBatch` and
+`BatchTooLarge` validation passes, and removed before the function returns
+(including on error paths). It is never `true` at rest between transactions.
+Upgrades performed between transactions leave no guard state to clean up.
+
+`DataKey::Meta` is written once at deployment time and never updated. No
+migration is needed when upgrading unless the `BatcherMeta` struct layout
+changes (see "Adding a New `DataKey` Variant" below).
 
 ## Migration Steps
 
@@ -53,7 +58,7 @@ that changes this constant.
 
 ### Changing Error Code Values
 
-`MuxBatcherError` discriminants (1–5) are part of the on-chain ABI. Clients
+`MuxBatcherError` discriminants (1–6) are part of the on-chain ABI. Clients
 that match on numeric codes must be updated if codes change. Coordinate any
 renumbering with a registry version bump and update `docs/error_codes.md`.
 

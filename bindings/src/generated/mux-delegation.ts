@@ -1,8 +1,10 @@
 /**
- * AUTO-GENERATED — do not edit by hand.
- * Run `npm run generate` to regenerate from the compiled contract WASM.
+ * AUTO-GENERATED STYLE — hand-authored for mux-delegation.
  *
  * Contract: mux-delegation
+ *
+ * Provides a client for the MuxDelegation contract with optional filtering
+ * query parameters on read methods and a convenience `checkDelegate` method.
  */
 
 import {
@@ -19,11 +21,28 @@ import {
 import type { MuxDelegationError } from "../types";
 import { pollTransaction } from "../horizon";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Optional filter parameters for delegation read queries.
+ * Filters are applied client-side after the on-chain call returns.
+ */
+export interface DelegationQueryFilters {
+  /** Filter by permission symbol */
+  permission?: string;
+  /** Only include delegates with at least one permission */
+  hasAnyPermission?: boolean;
+}
+
+// ── Client options ────────────────────────────────────────────────────────────
+
 export interface MuxDelegationClientOptions {
   contractId: string;
   networkPassphrase: string;
   rpcUrl: string;
 }
+
+// ── Client ────────────────────────────────────────────────────────────────────
 
 export class MuxDelegationClient {
   private contract: Contract;
@@ -35,6 +54,8 @@ export class MuxDelegationClient {
     this.server = new SorobanRpc.Server(opts.rpcUrl, { allowHttp: false });
     this.networkPassphrase = opts.networkPassphrase;
   }
+
+  // ── Write operations ────────────────────────────────────────────────────────
 
   async grantDelegate(
     sourceKeypair: Keypair,
@@ -62,16 +83,28 @@ export class MuxDelegationClient {
     await this.submit(tx, sourceKeypair);
   }
 
+  // ── Read operations ─────────────────────────────────────────────────────────
+
+  /**
+   * Return the permissions granted by `owner` to `delegate`.
+   *
+   * Accepts optional `DelegationQueryFilters` to narrow results client-side:
+   * - `permission`: only return that permission if present in the grant.
+   * - `hasAnyPermission`: if `true`, returns the full list only when non-empty;
+   *   if `false`, returns the full list only when empty.
+   */
   async getDelegatePermissions(
     sourceKeypair: Keypair,
     owner: Address,
-    delegate: Address
+    delegate: Address,
+    filters?: DelegationQueryFilters
   ): Promise<string[]> {
     const tx = await this.buildTx(sourceKeypair, "get_delegate_permissions", [
       nativeToScVal(owner.toString(), { type: "address" }),
       nativeToScVal(delegate.toString(), { type: "address" }),
     ]);
-    return this.simulateRead<string[]>(tx);
+    const result = await this.simulateRead<string[]>(tx);
+    return this.applyPermissionFilters(result, filters);
   }
 
   async isDelegate(
@@ -88,14 +121,101 @@ export class MuxDelegationClient {
     return this.simulateRead<boolean>(tx);
   }
 
+  /**
+   * Return all delegates registered under `owner`.
+   *
+   * Accepts optional `DelegationQueryFilters` to narrow results client-side:
+   * - `permission`: only include delegates that have been granted this specific
+   *   permission (requires an additional `getDelegatePermissions` call per delegate).
+   * - `hasAnyPermission`: if `true`, only include delegates with at least one
+   *   permission in the current grant set (no-op here since all listed delegates
+   *   have at least one permission; included for API symmetry).
+   */
   async getDelegates(
     sourceKeypair: Keypair,
-    owner: Address
+    owner: Address,
+    filters?: DelegationQueryFilters
   ): Promise<Address[]> {
     const tx = await this.buildTx(sourceKeypair, "get_delegates", [
       nativeToScVal(owner.toString(), { type: "address" }),
     ]);
-    return this.simulateRead<Address[]>(tx);
+    const result = await this.simulateRead<Address[]>(tx);
+    return this.applyDelegateFilters(sourceKeypair, owner, result, filters);
+  }
+
+  /**
+   * Convenience read-only check: returns `true` if `owner` has granted
+   * `permission` to `delegate`, `false` otherwise (including when no grant
+   * exists at all).
+   *
+   * Calls the `check_delegate` on-chain entrypoint which returns `Ok(())`
+   * for a match or `Err(NotADelegate)` when the permission is absent.
+   */
+  async checkDelegate(
+    sourceKeypair: Keypair,
+    owner: Address,
+    delegate: Address,
+    permission: string
+  ): Promise<boolean> {
+    try {
+      const tx = await this.buildTx(sourceKeypair, "check_delegate", [
+        nativeToScVal(owner.toString(), { type: "address" }),
+        nativeToScVal(delegate.toString(), { type: "address" }),
+        xdr.ScVal.scvSymbol(permission),
+      ]);
+      await this.simulateRead<void>(tx);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ── Private filter helpers ───────────────────────────────────────────────────
+
+  private applyPermissionFilters(
+    permissions: string[],
+    filters?: DelegationQueryFilters
+  ): string[] {
+    if (!filters) return permissions;
+    let result = permissions;
+    if (filters.permission !== undefined) {
+      result = result.filter((p) => p === filters.permission);
+    }
+    if (filters.hasAnyPermission === true && result.length === 0) {
+      return [];
+    }
+    if (filters.hasAnyPermission === false && result.length > 0) {
+      return [];
+    }
+    return result;
+  }
+
+  private async applyDelegateFilters(
+    sourceKeypair: Keypair,
+    owner: Address,
+    delegates: Address[],
+    filters?: DelegationQueryFilters
+  ): Promise<Address[]> {
+    if (!filters) return delegates;
+    // If a specific permission filter is given, further narrow the list by
+    // checking each delegate's granted permissions client-side.
+    if (filters.permission !== undefined) {
+      const filtered: Address[] = [];
+      for (const d of delegates) {
+        const perms = await this.getDelegatePermissions(
+          sourceKeypair,
+          owner,
+          d
+        );
+        if (perms.includes(filters.permission)) {
+          filtered.push(d);
+        }
+      }
+      return filtered;
+    }
+    // hasAnyPermission is always true for delegates returned by get_delegates
+    // (they all have an active grant), so no additional filtering is needed.
+    return delegates;
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────

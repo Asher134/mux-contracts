@@ -165,7 +165,16 @@ impl MuxBatcher {
     /// If any operation has `require_success = true` and fails, returns
     /// `Err(RequiredOperationFailed)` and emits a `bat_abort` event.
     ///
-    /// Emits:
+    /// The reentrancy guard (`DataKey::Executing`) is set immediately after the
+    /// size checks pass and is **always** removed before this function returns,
+    /// regardless of outcome:
+    /// - Cleared after the batch loop completes successfully.
+    /// - Cleared before returning `Err(RequiredOperationFailed)` on the abort path.
+    /// Note: `Err(EmptyBatch)` and `Err(BatchTooLarge)` return before the guard
+    /// is ever set, so no cleanup is needed on those paths.
+    ///
+    /// Emits (in order):
+    /// - `bat_start` — immediately after size checks pass, before any operations run
     /// - `bat_abort` — when a required operation fails (before returning error)
     /// - `executed`  — on success, with (caller, success_count, failure_count)
     /// - `bat_ok`    — only when every operation in the batch succeeded
@@ -310,7 +319,10 @@ impl MuxBatcher {
         if env.storage().instance().has(&DataKey::Meta) {
             return Err(MuxBatcherError::MetadataAlreadySet);
         }
-        let meta = BatcherMeta { description, author };
+        let meta = BatcherMeta {
+            description,
+            author,
+        };
         env.storage().instance().set(&DataKey::Meta, &meta);
         env.storage()
             .instance()
@@ -396,6 +408,22 @@ mod tests {
         soroban_sdk::Symbol::from_val(env, &topics.get(1).unwrap())
     }
 
+    /// Build `count` noop operations for batch-size boundary tests.
+    fn make_nop_ops(env: &Env, count: u32) -> Vec<Operation> {
+        let mut ops: Vec<Operation> = Vec::new(env);
+        let target = Address::generate(env);
+        for _ in 0..count {
+            ops.push_back(Operation {
+                target: target.clone(),
+                fn_name: symbol_short!("noop"),
+                args: Vec::new(env),
+                require_success: false,
+                kind: BatchOperationKind::Invoke,
+            });
+        }
+        ops
+    }
+
     #[test]
     fn test_execute_batch_emits_event() {
         let env = Env::default();
@@ -469,7 +497,21 @@ mod tests {
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_execute_batch(&caller, &ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
+    }
+
+    #[test]
+    fn test_empty_batch_does_not_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops: Vec<Operation> = Vec::new(&env);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -500,6 +542,102 @@ mod tests {
         assert!(client.try_execute_batch(&caller, &ops).is_ok());
     }
 
+    // ── Reentrancy guard: abort path ──────────────────────────────────────────
+
+    #[test]
+    fn test_reentrancy_guard_clears_after_required_op_fails() {
+        // If a required operation fails the batch aborts with RequiredOperationFailed.
+        // The reentrancy guard must be cleared before the function returns so that
+        // a subsequent call can succeed.  If the guard were left set the second call
+        // would return ReentrancyDetected instead of executing normally.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let target_id = env.register_contract(None, DummyTarget);
+
+        let caller = Address::generate(&env);
+
+        // First call: required op against a non-existent target → aborts.
+        let mut abort_ops: Vec<Operation> = Vec::new(&env);
+        abort_ops.push_back(Operation {
+            target: Address::generate(&env), // non-existent → will fail
+            fn_name: symbol_short!("noop"),
+            args: Vec::new(&env),
+            require_success: true,
+            kind: BatchOperationKind::Invoke,
+        });
+        let abort_result = client.try_execute_batch(&caller, &abort_ops);
+        assert!(
+            abort_result.is_err(),
+            "first batch must fail with RequiredOperationFailed"
+        );
+
+        // Second call: a successful batch against a real target.
+        // This must succeed — the guard must have been cleared on the abort path.
+        let mut ok_ops: Vec<Operation> = Vec::new(&env);
+        ok_ops.push_back(Operation {
+            target: target_id,
+            fn_name: symbol_short!("noop"),
+            args: Vec::new(&env),
+            require_success: true,
+            kind: BatchOperationKind::Invoke,
+        });
+        let ok_result = client.try_execute_batch(&caller, &ok_ops);
+        assert!(
+            ok_result.is_ok(),
+            "second batch must succeed — guard must be cleared after abort"
+        );
+    }
+
+    #[test]
+    fn test_reentrancy_detected_when_executing_flag_already_set() {
+        // Simulate a re-entrant call by pre-seeding DataKey::Executing = true in
+        // instance storage before calling execute_batch.  execute_batch must detect
+        // the flag and return ReentrancyDetected without processing any operations.
+        //
+        // Note: the Soroban test environment does not support true recursive
+        // cross-contract re-entry within a single test frame, so we seed the flag
+        // directly to exercise the guard check in isolation.
+        use soroban_sdk::testutils::storage::Instance as _;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        // Seed the reentrancy flag directly as if a prior (incomplete) call set it.
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::Executing, &true);
+        });
+
+        let caller = Address::generate(&env);
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        ops.push_back(Operation {
+            target: Address::generate(&env),
+            fn_name: symbol_short!("noop"),
+            args: Vec::new(&env),
+            require_success: false,
+            kind: BatchOperationKind::Invoke,
+        });
+
+        let result = client.try_execute_batch(&caller, &ops);
+        assert!(
+            result.is_err(),
+            "execute_batch must return an error when guard is already set"
+        );
+        // The outer Result<Result<BatchResult, MuxBatcherError>, _> — unwrap the
+        // transport layer and check the contract error.
+        let contract_err = result.unwrap_err();
+        assert_eq!(
+            contract_err,
+            Ok(MuxBatcherError::ReentrancyDetected),
+            "error must be ReentrancyDetected when Executing flag is pre-set"
+        );
+    }
+
     #[test]
     fn test_batch_too_large_rejected() {
         let env = Env::default();
@@ -508,19 +646,37 @@ mod tests {
         let client = MuxBatcherClient::new(&env, &contract_id);
 
         let caller = Address::generate(&env);
-        let mut ops: Vec<Operation> = Vec::new(&env);
-        let target = Address::generate(&env);
-        for _ in 0..51 {
-            ops.push_back(Operation {
-                target: target.clone(),
-                fn_name: soroban_sdk::symbol_short!("noop"),
-                args: Vec::new(&env),
-                require_success: false,
-                kind: BatchOperationKind::Invoke,
-            });
-        }
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
         let result = client.try_execute_batch(&caller, &ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
+    }
+
+    #[test]
+    fn test_execute_batch_at_max_size_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE);
+        let result = client.try_simulate_batch(&caller, &ops);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap().success_count, MAX_BATCH_SIZE);
+    }
+
+    #[test]
+    fn test_batch_too_large_does_not_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -625,7 +781,8 @@ mod tests {
 
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_submit_batch(&ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -635,19 +792,10 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        let mut ops: Vec<Operation> = Vec::new(&env);
-        let target = Address::generate(&env);
-        for _ in 0..51 {
-            ops.push_back(Operation {
-                target: target.clone(),
-                fn_name: soroban_sdk::symbol_short!("noop"),
-                args: Vec::new(&env),
-                require_success: false,
-                kind: BatchOperationKind::Invoke,
-            });
-        }
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
         let result = client.try_submit_batch(&ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
     }
 
     #[test]
@@ -728,7 +876,9 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        assert!(client.try_estimate_fees(&0).is_err());
+        let result = client.try_estimate_fees(&0);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -737,7 +887,21 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        assert!(client.try_estimate_fees(&51).is_err());
+        let result = client.try_estimate_fees(&(MAX_BATCH_SIZE + 1));
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
+    }
+
+    #[test]
+    fn test_estimate_fees_at_max_size_accepted() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.estimate_fees(&MAX_BATCH_SIZE),
+            MAX_BATCH_SIZE.saturating_mul(FEE_PER_OP)
+        );
     }
 
     // ── simulate_batch tests (#233 / #234) ────────────────────────────────────
@@ -797,7 +961,9 @@ mod tests {
 
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
-        assert!(client.try_simulate_batch(&caller, &ops).is_err());
+        let result = client.try_simulate_batch(&caller, &ops);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -808,18 +974,10 @@ mod tests {
         let client = MuxBatcherClient::new(&env, &contract_id);
 
         let caller = Address::generate(&env);
-        let mut ops: Vec<Operation> = Vec::new(&env);
-        let target = Address::generate(&env);
-        for _ in 0..51 {
-            ops.push_back(Operation {
-                target: target.clone(),
-                fn_name: symbol_short!("noop"),
-                args: Vec::new(&env),
-                require_success: false,
-                kind: BatchOperationKind::Invoke,
-            });
-        }
-        assert!(client.try_simulate_batch(&caller, &ops).is_err());
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let result = client.try_simulate_batch(&caller, &ops);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
     }
 
     // ── bat_start event (#235) ────────────────────────────────────────────────
@@ -887,7 +1045,9 @@ mod tests {
         let description = String::from_str(&env, "Multi-operation batching contract");
         let author = String::from_str(&env, "mux-labs");
 
-        assert!(client.try_set_registry_metadata(&description, &author).is_ok());
+        assert!(client
+            .try_set_registry_metadata(&description, &author)
+            .is_ok());
         let meta = client.get_registry_metadata().unwrap();
         assert_eq!(meta.description, description);
         assert_eq!(meta.author, author);
@@ -903,7 +1063,9 @@ mod tests {
         let author = String::from_str(&env, "mux-labs");
 
         client.set_registry_metadata(&description, &author);
-        assert!(client.try_set_registry_metadata(&description, &author).is_err());
+        assert!(client
+            .try_set_registry_metadata(&description, &author)
+            .is_err());
     }
 
     #[test]
