@@ -44,9 +44,13 @@ let limit: u32 = batcher_client.max_batch_size();
 
 | Function | Caller arg | Description |
 |---|---|---|
-| `execute_batch(caller, ops)` | Explicit | Executes ops on behalf of `caller`; `caller.require_auth()` is enforced |
-| `submit_batch(ops)` | Derived from invoker | Convenience wrapper — derives caller from `env.current_contract_address()`; no explicit caller arg needed |
-| `simulate_batch(caller, ops)` | Explicit | Preflight estimate; no state written |
+| `execute_batch(caller, ops)` | Explicit | Executes ops on behalf of `caller`; `caller.require_auth()` is enforced; reentrancy guard set/cleared |
+| `submit_batch(ops)` | Derived from invoker | Convenience wrapper — derives caller from `env.current_contract_address()`; delegates to `execute_batch` |
+| `simulate_batch(caller, ops)` | Explicit | Preflight estimate; no state written, no contracts invoked |
+| `estimate_fees(op_count)` | — | Pure computation — returns `op_count × FEE_PER_OP` stroops; no storage touched |
+| `max_batch_size()` | — | Returns the `MAX_BATCH_SIZE` constant at runtime; no auth required |
+| `set_registry_metadata(description, author)` | — | Stores deployment metadata once; returns `Err(MetadataAlreadySet)` on repeat calls |
+| `get_registry_metadata()` | — | Returns stored `BatcherMeta` or `None`; no auth required |
 
 ### Why 50?
 
