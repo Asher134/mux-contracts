@@ -65,14 +65,14 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   Unauthorized: 401,
 
   // Not Found errors → 404
-  NotADelegate: 404,
+  NotADelegate: 404,       // MuxDelegationError (6001): no grant for (owner, delegate)
   DelegateNotFound: 404,
   RoleNotFound: 404,
   AccountNotInRole: 404,
   PermissionNotFound: 404,
   ContractNotFound: 404,
   WalletNotFound: 404,
-  MetadataNotFound: 404,
+  MetadataNotFound: 404,   // MuxAccountFactoryError (4)
   AdminNotFound: 404,
   LimitNotFound: 404,
 
@@ -88,6 +88,7 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   MetadataTooLarge: 400,
 
   // Delegation constraint errors → 400
+  // MuxDelegationError::TooManyPermissions (6002) and ::EmptyPermissions (6003)
   TooManyPermissions: 400,
   EmptyPermissions: 400,
 
