@@ -124,7 +124,48 @@ export function muxBatcherErrorMessage(error: MuxBatcherError | number): string 
 export type MuxDelegationError =
   | "NotADelegate"
   | "TooManyPermissions"
-  | "EmptyPermissions";
+  | "EmptyPermissions"
+  | "TooManyDelegates";
+
+/**
+ * Maps a `MuxDelegationError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `MuxDelegationError` enum in
+ * `contracts/mux-delegation/src/lib.rs` (stable ABI codes 6001–6004).
+ *
+ * Relevant to the delegate permissions map (closes #407):
+ *   - `getDelegatePermissions` and `isDelegate` are read-only and do not
+ *     return errors; they return an empty list / false for unknown pairs.
+ *
+ * @example
+ * ```ts
+ * import { muxDelegationErrorMessage } from "./types";
+ * console.log(muxDelegationErrorMessage("NotADelegate")); // "no delegate grant found for this pair"
+ * console.log(muxDelegationErrorMessage(6001));           // "no delegate grant found for this pair"
+ * ```
+ */
+export function muxDelegationErrorMessage(
+  error: MuxDelegationError | number
+): string {
+  const codeMap: Record<number, string> = {
+    6001: "no delegate grant found for this pair",
+    6002: "permission list exceeds the 64-entry cap",
+    6003: "permission list is empty; at least one permission is required",
+    6004: "owner already has 128 delegates registered",
+  };
+
+  const nameMap: Record<MuxDelegationError, number> = {
+    NotADelegate: 6001,
+    TooManyPermissions: 6002,
+    EmptyPermissions: 6003,
+    TooManyDelegates: 6004,
+  };
+
+  const code =
+    typeof error === "number" ? error : nameMap[error] ?? -1;
+  return codeMap[code] ?? "unknown error code";
+}
 
 export type MuxPermissionsError =
   | "NotInitialized"
@@ -153,7 +194,7 @@ export type MuxPermissionsError =
  * ```
  */
 export function muxPermissionsErrorMessage(
-  error: MuxPermissionsError | number
+  error: MuxPermissionsError | number,
 ): string {
   const codeMap: Record<number, string> = {
     1: "contract not initialized",
@@ -181,8 +222,7 @@ export function muxPermissionsErrorMessage(
     AlreadyApproved: 10,
   };
 
-  const code =
-    typeof error === "number" ? error : nameMap[error] ?? -1;
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
   return codeMap[code] ?? "unknown error code";
 }
 
@@ -200,7 +240,7 @@ export function muxPermissionsErrorMessage(
  * ```
  */
 export function muxAccountErrorMessage(
-  error: MuxAccountError | number
+  error: MuxAccountError | number,
 ): string {
   const codeMap: Record<number, string> = {
     1: "contract not initialized",
@@ -214,6 +254,7 @@ export function muxAccountErrorMessage(
     9: "too many delegates",
     10: "reentrancy detected",
     11: "arithmetic overflow",
+    12: "too many session keys",
   };
 
   const nameMap: Record<MuxAccountError, number> = {
@@ -228,16 +269,54 @@ export function muxAccountErrorMessage(
     TooManyDelegates: 9,
     ReentrancyDetected: 10,
     ArithmeticOverflow: 11,
+    TooManySessionKeys: 12,
   };
 
-  const code =
-    typeof error === "number" ? error : nameMap[error] ?? -1;
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
   return codeMap[code] ?? "unknown error code";
 }
 
 export interface SpendingPolicyLimit {
   asset: Address;
   limit: bigint;
+}
+
+/**
+ * Maps a `SpendingPolicyError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `SpendingPolicyError` enum in `contracts/mux-spending-policy`.
+ *
+ * @example
+ * ```ts
+ * import { spendingPolicyErrorMessage } from "./types";
+ * console.log(spendingPolicyErrorMessage("PolicyNotFound")); // "policy not found"
+ * console.log(spendingPolicyErrorMessage(4));                // "policy not found"
+ * ```
+ */
+export function spendingPolicyErrorMessage(
+  error: SpendingPolicyError | number,
+): string {
+  const codeMap: Record<number, string> = {
+    1: "contract not initialized",
+    2: "contract already initialized",
+    3: "caller is not authorized",
+    4: "policy not found",
+    5: "spend limit exceeded",
+    6: "invalid input",
+  };
+
+  const nameMap: Record<SpendingPolicyError, number> = {
+    NotInitialized: 1,
+    AlreadyInitialized: 2,
+    Unauthorized: 3,
+    PolicyNotFound: 4,
+    SpendLimitExceeded: 5,
+    InvalidInput: 6,
+  };
+
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
+  return codeMap[code] ?? "unknown error code";
 }
 
 export type MuxPolicyError =
@@ -254,4 +333,12 @@ export type SpendingPolicyError =
   | "AlreadyInitialized"
   | "Unauthorized"
   | "PolicyNotFound"
-  | "SpendLimitExceeded";
+  | "SpendLimitExceeded"
+  | "InvalidInput";
+
+export type MuxWalletRegistryError =
+  | "NotInitialized"
+  | "AlreadyInitialized"
+  | "Unauthorized"
+  | "WalletNotFound"
+  | "TooManyWallets";
