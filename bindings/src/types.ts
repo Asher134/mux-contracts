@@ -166,6 +166,7 @@ export function muxAccountErrorMessage(
     9: "too many delegates",
     10: "reentrancy detected",
     11: "arithmetic overflow",
+    12: "too many session keys",
   };
 
   const nameMap: Record<MuxAccountError, number> = {
@@ -180,6 +181,7 @@ export function muxAccountErrorMessage(
     TooManyDelegates: 9,
     ReentrancyDetected: 10,
     ArithmeticOverflow: 11,
+    TooManySessionKeys: 12,
   };
 
   const code =
