@@ -319,7 +319,10 @@ impl MuxBatcher {
         if env.storage().instance().has(&DataKey::Meta) {
             return Err(MuxBatcherError::MetadataAlreadySet);
         }
-        let meta = BatcherMeta { description, author };
+        let meta = BatcherMeta {
+            description,
+            author,
+        };
         env.storage().instance().set(&DataKey::Meta, &meta);
         env.storage()
             .instance()
@@ -405,6 +408,22 @@ mod tests {
         soroban_sdk::Symbol::from_val(env, &topics.get(1).unwrap())
     }
 
+    /// Build `count` noop operations for batch-size boundary tests.
+    fn make_nop_ops(env: &Env, count: u32) -> Vec<Operation> {
+        let mut ops: Vec<Operation> = Vec::new(env);
+        let target = Address::generate(env);
+        for _ in 0..count {
+            ops.push_back(Operation {
+                target: target.clone(),
+                fn_name: symbol_short!("noop"),
+                args: Vec::new(env),
+                require_success: false,
+                kind: BatchOperationKind::Invoke,
+            });
+        }
+        ops
+    }
+
     #[test]
     fn test_execute_batch_emits_event() {
         let env = Env::default();
@@ -478,7 +497,21 @@ mod tests {
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_execute_batch(&caller, &ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
+    }
+
+    #[test]
+    fn test_empty_batch_does_not_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops: Vec<Operation> = Vec::new(&env);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -613,19 +646,37 @@ mod tests {
         let client = MuxBatcherClient::new(&env, &contract_id);
 
         let caller = Address::generate(&env);
-        let mut ops: Vec<Operation> = Vec::new(&env);
-        let target = Address::generate(&env);
-        for _ in 0..51 {
-            ops.push_back(Operation {
-                target: target.clone(),
-                fn_name: soroban_sdk::symbol_short!("noop"),
-                args: Vec::new(&env),
-                require_success: false,
-                kind: BatchOperationKind::Invoke,
-            });
-        }
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
         let result = client.try_execute_batch(&caller, &ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
+    }
+
+    #[test]
+    fn test_execute_batch_at_max_size_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE);
+        let result = client.try_simulate_batch(&caller, &ops);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap().success_count, MAX_BATCH_SIZE);
+    }
+
+    #[test]
+    fn test_batch_too_large_does_not_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -730,7 +781,8 @@ mod tests {
 
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_submit_batch(&ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -740,19 +792,10 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        let mut ops: Vec<Operation> = Vec::new(&env);
-        let target = Address::generate(&env);
-        for _ in 0..51 {
-            ops.push_back(Operation {
-                target: target.clone(),
-                fn_name: soroban_sdk::symbol_short!("noop"),
-                args: Vec::new(&env),
-                require_success: false,
-                kind: BatchOperationKind::Invoke,
-            });
-        }
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
         let result = client.try_submit_batch(&ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
     }
 
     #[test]
@@ -833,7 +876,9 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        assert!(client.try_estimate_fees(&0).is_err());
+        let result = client.try_estimate_fees(&0);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -842,7 +887,21 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        assert!(client.try_estimate_fees(&51).is_err());
+        let result = client.try_estimate_fees(&(MAX_BATCH_SIZE + 1));
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
+    }
+
+    #[test]
+    fn test_estimate_fees_at_max_size_accepted() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.estimate_fees(&MAX_BATCH_SIZE),
+            MAX_BATCH_SIZE.saturating_mul(FEE_PER_OP)
+        );
     }
 
     // ── simulate_batch tests (#233 / #234) ────────────────────────────────────
@@ -902,7 +961,9 @@ mod tests {
 
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
-        assert!(client.try_simulate_batch(&caller, &ops).is_err());
+        let result = client.try_simulate_batch(&caller, &ops);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -913,18 +974,10 @@ mod tests {
         let client = MuxBatcherClient::new(&env, &contract_id);
 
         let caller = Address::generate(&env);
-        let mut ops: Vec<Operation> = Vec::new(&env);
-        let target = Address::generate(&env);
-        for _ in 0..51 {
-            ops.push_back(Operation {
-                target: target.clone(),
-                fn_name: symbol_short!("noop"),
-                args: Vec::new(&env),
-                require_success: false,
-                kind: BatchOperationKind::Invoke,
-            });
-        }
-        assert!(client.try_simulate_batch(&caller, &ops).is_err());
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let result = client.try_simulate_batch(&caller, &ops);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::BatchTooLarge);
     }
 
     // ── bat_start event (#235) ────────────────────────────────────────────────
@@ -992,7 +1045,9 @@ mod tests {
         let description = String::from_str(&env, "Multi-operation batching contract");
         let author = String::from_str(&env, "mux-labs");
 
-        assert!(client.try_set_registry_metadata(&description, &author).is_ok());
+        assert!(client
+            .try_set_registry_metadata(&description, &author)
+            .is_ok());
         let meta = client.get_registry_metadata().unwrap();
         assert_eq!(meta.description, description);
         assert_eq!(meta.author, author);
@@ -1008,7 +1063,9 @@ mod tests {
         let author = String::from_str(&env, "mux-labs");
 
         client.set_registry_metadata(&description, &author);
-        assert!(client.try_set_registry_metadata(&description, &author).is_err());
+        assert!(client
+            .try_set_registry_metadata(&description, &author)
+            .is_err());
     }
 
     #[test]
