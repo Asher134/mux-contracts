@@ -161,6 +161,26 @@ mod upgrade_tests {
 }
 ```
 
+## TypeScript bindings and integrators
+
+Mux TypeScript clients in `bindings/` talk to **contract IDs** (addresses), not WASM hashes. After an on-chain upgrade:
+
+1. **Contract IDs stay the same** — update application config only if you deploy to a new address (greenfield deploy, not upgrade).
+2. **Regenerate or verify bindings** when the Soroban interface changes (`cargo build` + export scripts in `bindings/`). Error enums and method signatures must match the upgraded WASM ABI.
+3. **Run smoke tests** against the upgraded network: read paths first (e.g. `get_version`, `owner`, `list_contracts`), then write paths in a staging environment.
+4. **Handle new error variants** in `bindings/src/errors.ts` and HTTP mappings if the upgraded contract adds `contracterror` codes.
+5. **Coordinate downtime** — upgrades are atomic on-chain, but relayers and indexers should tolerate a short window where old simulation assumptions may fail until they pick up the new WASM behavior.
+
+Per-contract storage migration notes:
+
+| Contract | Migration doc |
+|----------|----------------|
+| `mux-account` | [account-upgrade-migration.md](./account-upgrade-migration.md) |
+| `mux-batcher` | [batcher-upgrade.md](./batcher-upgrade.md) |
+| `mux-delegation` | [delegation-upgrade.md](./delegation-upgrade.md) |
+| `mux-permissions` | [permissions-upgrade-migration.md](./permissions-upgrade-migration.md) |
+| `mux-registry` | See [v0.1.0 migration notes](#v010--unreleased-registry-upgrade-migration-notes) below |
+
 ## References
 
 - [Soroban Contract Upgrade Docs](https://developers.stellar.org/docs/build/smart-contracts/example-contracts/upgradeable-contract)

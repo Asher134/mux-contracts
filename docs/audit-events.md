@@ -98,6 +98,21 @@ Contract tag: `mux_bat`
 
 ---
 
+## mux-spending-policy events
+
+Contract tag: `mux_spend`
+
+| Action | Trigger | Data payload |
+|---|---|---|
+| `init` | `initialize` succeeds | `admin: Address` |
+| `lmt_set` | `set_policy` succeeds | `(account: Address, asset: Address, limit: i128)` |
+| `chk_ok` | `check_spend` succeeds (within limit) | `(account: Address, asset: Address, amount: i128)` |
+| `chk_ex` | `check_spend` fails (exceeds limit or policy not found) | `(account: Address, asset: Address, amount: i128, limit_or_reason: i128 | Symbol)` |
+
+> `get_policy` is read-only and emits no events.
+
+---
+
 ## mux-wallet-registry events
 
 Contract tag: `mux_wreg`
