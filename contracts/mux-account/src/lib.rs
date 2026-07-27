@@ -346,6 +346,10 @@ impl MuxAccount {
         env.storage()
             .instance()
             .set(&DataKey::SpendLimit(asset.clone()), &limit);
+
+        // Clear reentrancy guard so subsequent top-level calls succeed.
+        env.storage().instance().remove(&DataKey::Executing);
+
         emit(&env, symbol_short!("debited"), (asset, spend));
         Self::extend_ttl(&env);
         Ok(())
