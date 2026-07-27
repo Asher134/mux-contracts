@@ -469,7 +469,21 @@ mod tests {
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_execute_batch(&caller, &ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
+    }
+
+    #[test]
+    fn test_empty_batch_does_not_emit_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let ops: Vec<Operation> = Vec::new(&env);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -625,7 +639,8 @@ mod tests {
 
         let ops: Vec<Operation> = Vec::new(&env);
         let result = client.try_submit_batch(&ops);
-        assert!(result.is_err());
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -728,7 +743,9 @@ mod tests {
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
 
-        assert!(client.try_estimate_fees(&0).is_err());
+        let result = client.try_estimate_fees(&0);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
@@ -797,7 +814,9 @@ mod tests {
 
         let caller = Address::generate(&env);
         let ops: Vec<Operation> = Vec::new(&env);
-        assert!(client.try_simulate_batch(&caller, &ops).is_err());
+        let result = client.try_simulate_batch(&caller, &ops);
+        let err = result.unwrap_err().unwrap();
+        assert_eq!(err, MuxBatcherError::EmptyBatch);
     }
 
     #[test]
