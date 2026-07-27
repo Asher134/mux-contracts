@@ -363,8 +363,11 @@ See the [Deploying Contracts](#deploying-contracts) section above for the full d
 ## Documentation
 
 - [Contract IDs](CONTRACT_IDS.md) — Per-network program addresses, update process, and upgrade authority
+- [Contract Upgrade Pattern](docs/contract-upgrade-pattern.md) — Soroban WASM upgrade flow, admin authorization, storage compatibility, rollback, and integrator checklist
 
 ## Documentation (Extended)
+
+- [Contract Upgrade Pattern](docs/contract-upgrade-pattern.md) — canonical upgrade procedure for all Mux Soroban contracts
 
 - [Architecture Overview](docs/architecture-overview.md) — High-level diagram and system components
 - [Policy Semantics](docs/policy-semantics.md) — Per-wallet daily spend limit design, reset logic, and error codes
