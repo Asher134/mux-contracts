@@ -13,6 +13,7 @@
 export { MuxBatcherClient } from "./generated/mux-batcher";
 export type { MuxBatcherClientOptions } from "./generated/mux-batcher";
 export type {
+  BatcherMeta,
   BatchOperationKind,
   BatchResult,
   MuxBatcherError,
