@@ -96,11 +96,20 @@ pub enum RecoveryError {
     RecoveryAlreadyPending = 4,
     NoActiveRecovery = 5,
     TimelockNotExpired = 6,
+    TooManyGuardians = 7,
+    GuardianAlreadyExists = 8,
+    GuardianNotFound = 9,
+    MinGuardiansRequired = 10,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
 const TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const TTL_EXTEND_TO: u32 = 518_400; // ~30 days
+
+// ── Storage griefing ─────────────────────────────────────────────────────────
+/// Maximum number of guardians to bound instance-storage growth.
+/// Each Address is ~32 bytes; 16 entries ≈ 0.5 KB.
+const MAX_GUARDIANS: u32 = 16;
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
@@ -538,6 +547,139 @@ mod tests {
             .unwrap_err()
             .unwrap();
         assert_eq!(err, RecoveryError::NoActiveRecovery);
+    }
+
+    // ── add_guardian / remove_guardian (#393) ──────────────────────────────────
+
+    #[test]
+    fn test_add_guardian_succeeds() {
+        let (env, client, _, _guardian) = setup();
+        let new_guardian = Address::generate(&env);
+        client.add_guardian(&new_guardian);
+        assert!(client.guardians().contains(&new_guardian));
+        assert_eq!(client.guardians().len(), 2);
+    }
+
+    #[test]
+    fn test_add_guardian_emits_event() {
+        let (env, client, _, _) = setup();
+        let new_guardian = Address::generate(&env);
+        client.add_guardian(&new_guardian);
+        let events = env.events().all();
+        // init + grd_add
+        assert_eq!(events.len(), 2);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("grd_add"));
+    }
+
+    #[test]
+    fn test_add_duplicate_guardian_rejected() {
+        let (_env, client, _, guardian) = setup();
+        let err = client.try_add_guardian(&guardian).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::GuardianAlreadyExists);
+    }
+
+    #[test]
+    fn test_add_guardian_cap_enforced() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        // Initialize with one guardian
+        let g1 = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, g1]);
+        // Fill to MAX_GUARDIANS (16), already have 1
+        for _ in 1..MAX_GUARDIANS {
+            client.add_guardian(&Address::generate(&env));
+        }
+        // One more must be rejected
+        let err = client
+            .try_add_guardian(&Address::generate(&env))
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::TooManyGuardians);
+    }
+
+    #[test]
+    fn test_remove_guardian_succeeds() {
+        let (env, client, _, guardian) = setup();
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        // Now we have 2 guardians, removing one should work
+        client.remove_guardian(&guardian);
+        assert!(!client.guardians().contains(&guardian));
+        assert_eq!(client.guardians().len(), 1);
+    }
+
+    #[test]
+    fn test_remove_guardian_emits_event() {
+        let (env, client, _, guardian) = setup();
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        client.remove_guardian(&guardian);
+        let events = env.events().all();
+        // init + grd_add + grd_rm
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("grd_rm"));
+    }
+
+    #[test]
+    fn test_remove_last_guardian_rejected() {
+        let (_env, client, _, guardian) = setup();
+        // Only 1 guardian, can't remove
+        let err = client
+            .try_remove_guardian(&guardian)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::MinGuardiansRequired);
+    }
+
+    #[test]
+    fn test_remove_nonexistent_guardian_rejected() {
+        let (env, client, _, _) = setup();
+        let stranger = Address::generate(&env);
+        let err = client
+            .try_remove_guardian(&stranger)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::GuardianNotFound);
+    }
+
+    #[test]
+    fn test_add_guardian_on_uninitialised_contract_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let guardian = Address::generate(&env);
+        let err = client.try_add_guardian(&guardian).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NotInitialized);
+    }
+
+    #[test]
+    fn test_removed_guardian_cannot_initiate_recovery() {
+        let (env, client, _, guardian) = setup();
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        client.remove_guardian(&guardian);
+        // Removed guardian tries to initiate recovery
+        let new_owner = Address::generate(&env);
+        let err = client
+            .try_initiate_recovery(&guardian, &new_owner)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+    }
+
+    #[test]
+    fn test_newly_added_guardian_can_initiate_recovery() {
+        let (env, client, _, _) = setup();
+        let g2 = Address::generate(&env);
+        client.add_guardian(&g2);
+        // New guardian can initiate recovery
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&g2, &new_owner);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
     }
 
     // ── symbol_short length audit (#496) ─────────────────────────────────────
