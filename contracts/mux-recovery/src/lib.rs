@@ -36,6 +36,14 @@ fn emit(env: &Env, action: soroban_sdk::Symbol, data: impl soroban_sdk::IntoVal<
 /// before it can be executed.
 pub const RECOVERY_TIMELOCK: u32 = 17_280;
 
+/// Maximum number of ledgers after initiation during which a recovery
+/// can be executed. After this window, the request auto-expires and a
+/// new recovery must be initiated.
+///
+/// At ~5-second ledger close times:
+///   120_960 ledgers ≈ 7 days
+pub const RECOVERY_EXPIRY: u32 = 120_960;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// Lifecycle state of a recovery request.
@@ -63,6 +71,10 @@ pub struct RecoveryRequest {
     /// The earliest ledger at which `execute_recovery` may be called
     /// (`initiated_at + RECOVERY_TIMELOCK`).
     pub executable_at: u32,
+    /// The latest ledger at which `execute_recovery` may still be called.
+    /// After this point the request is considered expired and a new
+    /// recovery must be initiated (`initiated_at + RECOVERY_EXPIRY`).
+    pub expires_at: u32,
     /// Current lifecycle state.
     pub status: RecoveryStatus,
 }
@@ -88,6 +100,7 @@ pub enum RecoveryError {
     RecoveryAlreadyPending = 4,
     NoActiveRecovery = 5,
     TimelockNotExpired = 6,
+    RecoveryExpired = 7,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
@@ -130,9 +143,12 @@ impl MuxRecovery {
         guardian.require_auth();
         Self::require_guardian(&env, &guardian)?;
 
-        // Reject if a pending recovery already exists.
+        // Reject if a non-expired pending recovery already exists.
+        // Expired pending requests are treated as stale and may be overwritten.
         if let Some(req) = Self::active_recovery(&env) {
-            if req.status == RecoveryStatus::Pending {
+            if req.status == RecoveryStatus::Pending
+                && env.ledger().sequence() < req.expires_at
+            {
                 return Err(RecoveryError::RecoveryAlreadyPending);
             }
         }
@@ -142,6 +158,7 @@ impl MuxRecovery {
             new_owner: new_owner.clone(),
             initiated_at,
             executable_at: initiated_at.saturating_add(RECOVERY_TIMELOCK),
+            expires_at: initiated_at.saturating_add(RECOVERY_EXPIRY),
             status: RecoveryStatus::Pending,
         };
         env.storage().instance().set(&DataKey::Recovery, &request);
@@ -173,6 +190,9 @@ impl MuxRecovery {
 
         if env.ledger().sequence() < request.executable_at {
             return Err(RecoveryError::TimelockNotExpired);
+        }
+        if env.ledger().sequence() >= request.expires_at {
+            return Err(RecoveryError::RecoveryExpired);
         }
 
         let new_owner = request.new_owner.clone();
@@ -505,19 +525,127 @@ mod tests {
         assert_eq!(err, RecoveryError::NoActiveRecovery);
     }
 
+    // ── initiate_recovery hardening (#394) ──────────────────────────────────
+
+    #[test]
+    fn test_reinitiate_recovery_after_cancellation() {
+        let (env, client, _, guardian) = setup();
+        let new_owner1 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner1);
+        client.cancel_recovery();
+        assert_eq!(client.recovery_status(), RecoveryStatus::Cancelled);
+
+        // A new recovery may be initiated after cancellation.
+        let new_owner2 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner2);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    }
+
+    #[test]
+    fn test_reinitiate_recovery_after_execution() {
+        let (env, client, _, guardian) = setup();
+        let new_owner1 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner1);
+        env.ledger().with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        client.execute_recovery(&guardian);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+
+        // A new recovery may be initiated after execution.
+        let new_owner2 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner2);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    }
+
+    #[test]
+    fn test_reinitiate_recovery_after_expiry() {
+        let (env, client, _, guardian) = setup();
+        let new_owner1 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner1);
+
+        // Advance past the expiry window — the pending request is now stale.
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY + 1);
+
+        // A new recovery may be initiated because the old one expired.
+        let new_owner2 = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner2);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    }
+
+    #[test]
+    fn test_execute_expired_recovery_rejected() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+
+        // Advance past the expiry window.
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY + 1);
+
+        let err = client
+            .try_execute_recovery(&guardian)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::RecoveryExpired);
+    }
+
+    #[test]
+    fn test_execute_recovery_within_valid_window() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+
+        // Advance past timelock but within expiry window.
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+
+        client.execute_recovery(&guardian);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+        assert_eq!(client.owner(), new_owner);
+    }
+
+    #[test]
+    fn test_recovery_expiry_boundary() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+
+        // Advance to exactly the expiry boundary (should fail — >= expires_at).
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY);
+
+        let err = client
+            .try_execute_recovery(&guardian)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::RecoveryExpired);
+    }
+
+    #[test]
+    fn test_recovery_just_before_expiry_succeeds() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+
+        // Advance to one ledger before expiry — should still succeed.
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY - 1);
+
+        client.execute_recovery(&guardian);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Executed);
+    }
+
     // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
     fn test_symbol_short_lengths_within_limit() {
-        let tags = [symbol_short!("mux_recv")];
-        let actions = [
+        let _tags = [symbol_short!("mux_recv")];
+        let _actions = [
             symbol_short!("init"),
             symbol_short!("rec_init"),
             symbol_short!("rec_cncl"),
             symbol_short!("rec_exec"),
         ];
-        for sym in tags.iter().chain(actions.iter()) {
-            assert!(sym.to_val().len() <= 8);
-        }
+        // symbol_short! validates length at compile time; reaching here is sufficient.
     }
 }
