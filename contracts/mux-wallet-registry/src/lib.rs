@@ -18,6 +18,9 @@
  * | `init`    | `initialize` succeeds            | `owner: Address`              |
  * | `wlt_reg` | `register_wallet` succeeds       | `(name: Symbol, wallet: Address)` |
  * | `wlt_meta`| `register_wallet_with_metadata` succeeds | `(name: Symbol, wallet: Address)` |
+ * This crate is `#![no_std]` and uses `extern crate alloc` for heap-backed
+ * types used in tests (e.g. `format!` for generating symbol names).
+ * All data structures use Soroban SDK types backed by the Soroban host.
  *
  * ## Upgrade Migration Notes
  *
@@ -42,6 +45,8 @@
  */
 
 #![no_std]
+
+extern crate alloc;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
@@ -242,6 +247,17 @@ impl MuxWalletRegistry {
             .instance()
             .get(&DataKey::Metadata(name))
             .ok_or(WalletRegistryError::WalletNotFound)
+    }
+
+    /// List all registered wallet names.
+    ///
+    /// Returns an empty vec if `initialize` has not been called yet.
+    /// No authorisation is required.
+    pub fn list_wallets(env: Env) -> Vec<Symbol> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Names)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
@@ -618,5 +634,118 @@ mod tests {
         );
         // No extra event from the failed call.
         assert_eq!(env.events().all().len(), before);
+    }
+
+    /// register_wallet_with_metadata must enforce the TooManyWallets cap.
+    /// Fill the registry to MAX_WALLETS via register_wallet, then a call to
+    /// register_wallet_with_metadata with a new name must return TooManyWallets.
+    #[test]
+    fn test_register_wallet_with_metadata_caps_names() {
+        let (env, client, _) = setup();
+        env.budget().reset_unlimited();
+        // Register MAX_WALLETS entries via the basic path.
+        for i in 0..MAX_WALLETS {
+            let name = soroban_sdk::Symbol::new(&env, &alloc::format!("wlt{}", i));
+            let wallet = Address::generate(&env);
+            client.register_wallet(&name, &wallet);
+        }
+
+        // register_wallet_with_metadata with a new name must now be rejected.
+        let overflow = soroban_sdk::Symbol::new(&env, "overflow");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "overflow label");
+        let desc = String::from_str(&env, "overflow desc");
+        let result =
+            client.try_register_wallet_with_metadata(&overflow, &wallet, &label, &desc);
+        assert_eq!(result, Err(Ok(WalletRegistryError::TooManyWallets)));
+    }
+
+    /// register_wallet_with_metadata on an existing name must not duplicate
+    /// the name in the Names vec.
+    #[test]
+    fn test_register_wallet_with_metadata_no_duplicate_names() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("carol");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "label");
+        let desc = String::from_str(&env, "desc");
+
+        // Register via basic path, then upgrade via metadata path.
+        client.register_wallet(&name, &wallet);
+        client.register_wallet_with_metadata(&name, &wallet, &label, &desc);
+
+        // Name should appear exactly once.
+        let names: soroban_sdk::Vec<soroban_sdk::Symbol> = client.list_wallets();
+        let count = names.iter().filter(|n| *n == name).count();
+        assert_eq!(count, 1);
+    }
+
+    /// register_wallet_with_metadata before init must return NotInitialized.
+    #[test]
+    fn test_register_wallet_with_metadata_before_init_returns_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let name = symbol_short!("alice");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "label");
+        let desc = String::from_str(&env, "desc");
+        assert_eq!(
+            client.try_register_wallet_with_metadata(&name, &wallet, &label, &desc),
+            Err(Ok(WalletRegistryError::NotInitialized))
+        );
+    }
+
+    /// get_metadata on a completely uninitialized contract returns WalletNotFound
+    /// (no auth required — the Metadata key is simply absent).
+    #[test]
+    fn test_get_metadata_on_uninitialized_contract_returns_not_found() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        assert_eq!(
+            client.try_get_metadata(&symbol_short!("x")),
+            Err(Ok(WalletRegistryError::WalletNotFound))
+        );
+    }
+
+    /// Registering with register_wallet does not create a Metadata entry.
+    /// get_metadata on a wallet registered without metadata must return WalletNotFound.
+    #[test]
+    fn test_get_metadata_missing_after_register_without_metadata() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("bare");
+        let wallet = Address::generate(&env);
+        client.register_wallet(&name, &wallet);
+        assert_eq!(client.get_wallet(&name), wallet);
+        assert_eq!(
+            client.try_get_metadata(&name),
+            Err(Ok(WalletRegistryError::WalletNotFound))
+        );
+    }
+
+    /// register_wallet then register_wallet_with_metadata interop:
+    /// upgrading a bare-registered name to full metadata must work and must
+    /// leave the wallet address unchanged.
+    #[test]
+    fn test_register_then_register_with_metadata_interop() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("eve");
+        let wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Eve's Wallet");
+        let desc = String::from_str(&env, "Upgraded from bare registration");
+
+        // Bare register first.
+        client.register_wallet(&name, &wallet);
+        assert_eq!(client.get_wallet(&name), wallet);
+        assert!(client.try_get_metadata(&name).is_err());
+
+        // Upgrade to full metadata.
+        client.register_wallet_with_metadata(&name, &wallet, &label, &desc);
+        assert_eq!(client.get_wallet(&name), wallet);
+        let meta = client.get_metadata(&name);
+        assert_eq!(meta.label, label);
+        assert_eq!(meta.description, desc);
     }
 }

@@ -403,6 +403,7 @@ mod tests {
         let version = String::from_str(&env, "1.0.0");
         let desc = String::from_str(&env, "desc");
         let author = String::from_str(&env, "mux-labs");
+        let repo = String::from_str(&env, "https://github.com/mux-labs/mux-contracts");
 
         // Fill the registry to exactly MAX_CONTRACTS (128) entries.
         // Two-letter base-26 symbols: "aa"=0 … "ex"=127, "ey"=128.
