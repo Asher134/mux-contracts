@@ -1,0 +1,16 @@
+[package]
+name = "mux-contract-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Integration / fuzz scaffolding tests for mux-contracts"
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+mux-account = { path = "../contracts/mux-account", features = ["testutils"] }
+mux-batcher = { path = "../contracts/mux-batcher", features = ["testutils"] }
+soroban-test-helpers = { path = "../contracts/soroban-test-helpers" }
+
+[[test]]
+name = "fuzz_placeholder"
+path = "fuzz_placeholder.rs"

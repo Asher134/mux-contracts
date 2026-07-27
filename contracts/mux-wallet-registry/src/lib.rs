@@ -3,6 +3,11 @@
  *
  * Allows an owner to register and look up wallet addresses by a symbolic name.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * ## Upgrade Migration Notes
  *
  * When upgrading this contract to a new version:
@@ -27,7 +32,9 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -40,6 +47,18 @@ pub enum DataKey {
     Wallet(Symbol),
     /// List of wallet names registered in this contract.
     Names,
+    /// Optional metadata associated with a wallet name.
+    Metadata(Symbol),
+}
+
+/// Descriptive metadata attached to a wallet entry.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WalletMetadata {
+    /// Human-readable label for the wallet.
+    pub label: String,
+    /// Free-form description / notes.
+    pub description: String,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -165,6 +184,20 @@ impl MuxWalletRegistry {
         description: String,
     ) -> Result<(), WalletRegistryError> {
         Self::require_owner(&env)?;
+        let mut names: Vec<Symbol> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Names)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if !names.contains(&name) {
+            if names.len() >= MAX_WALLETS {
+                return Err(WalletRegistryError::TooManyWallets);
+            }
+            names.push_back(name.clone());
+            env.storage().instance().set(&DataKey::Names, &names);
+        }
+
         env.storage()
             .instance()
             .set(&DataKey::Wallet(name.clone()), &wallet);
@@ -172,6 +205,7 @@ impl MuxWalletRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Metadata(name), &meta);
+        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -209,7 +243,8 @@ impl MuxWalletRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{symbol_short, testutils::Address as _, Env, String};
+    use alloc::format;
+    use soroban_sdk::{symbol_short, testutils::Address as _, Env, FromVal, String};
 
     fn setup() -> (Env, MuxWalletRegistryClient<'static>, Address) {
         let env = Env::default();
@@ -246,6 +281,39 @@ mod tests {
     }
 
     #[test]
+    fn test_double_initialize_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        client.initialize(&owner);
+
+        let result = client.try_initialize(&owner);
+        assert_eq!(result, Err(Ok(WalletRegistryError::AlreadyInitialized)));
+    }
+
+    #[test]
+    fn test_double_initialize_with_different_owner_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let other = Address::generate(&env);
+        client.initialize(&owner);
+
+        let result = client.try_initialize(&other);
+        assert_eq!(result, Err(Ok(WalletRegistryError::AlreadyInitialized)));
+
+        // Original owner must still be able to register after the rejected re-init.
+        let name = symbol_short!("alice");
+        let wallet = Address::generate(&env);
+        assert!(client.try_register_wallet(&name, &wallet).is_ok());
+        assert_eq!(client.get_wallet(&name), wallet);
+    }
+
+    #[test]
     fn test_register_and_get_wallet() {
         let (env, client, _) = setup();
         let name = symbol_short!("alice");
@@ -259,7 +327,7 @@ mod tests {
         let (env, client, _) = setup();
         env.budget().reset_unlimited();
         for i in 0..MAX_WALLETS {
-            let name = soroban_sdk::Symbol::new(&env, format!("wallet{}", i));
+            let name = soroban_sdk::Symbol::new(&env, &format!("wallet{}", i));
             let wallet = Address::generate(&env);
             client.register_wallet(&name, &wallet);
         }

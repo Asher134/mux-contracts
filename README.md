@@ -228,39 +228,88 @@ async function handleContractCall(req, res) {
 
 ### Using Docker Compose
 
-Run a complete local Stellar/Soroban node for offline development and testing:
+[`docker-compose.yml`](docker-compose.yml) starts the official `stellar/quickstart` image in standalone
+mode with **core, horizon, and RPC** all enabled.  It replaces the deprecated
+`QUICKSTART_SOROBAN` environment variable with the modern `--enable` flag and
+adds resource limits, a bounded named volume, and an extended health-check
+`start_period` so slow hosts don't produce spurious failures.
+
+#### Quick start
 
 ```bash
-# Start the localnet
-docker-compose up --wait
+# 1. (Optional) copy and customise the env file
+cp .env.localnet.example .env.localnet
+# edit .env.localnet — at minimum set QUICKSTART_CPUS / QUICKSTART_MEMORY
+#                      and fill in contract IDs after deploying
 
-# Verify the node is ready
-curl -X POST http://localhost:8000 \
+# 2. Start the localnet (waits until the RPC endpoint is healthy)
+docker-compose --env-file .env.localnet up --wait
+
+# 3. Verify the RPC endpoint
+curl -s -X POST http://localhost:8000 \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"getNetwork","params":[]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"getNetwork","params":[]}' | jq .
 
-# In another terminal, run tests against localnet
+# 4. In another terminal, run integration tests against localnet
 cd bindings
 SOROBAN_NETWORK=localnet npm test
 
-# Stop the localnet
+# 5. Stop the localnet (ledger data is preserved in the named volume)
 docker-compose down
 
-# Remove persisted data and start fresh
+# 6. Wipe persisted ledger data and start fresh
 docker-compose down -v
 ```
 
-**Environment Configuration:**
+#### What the compose file configures
 
-Copy `.env.localnet.example` to `.env.localnet` to customize:
-```bash
-cp .env.localnet.example .env.localnet
-# Edit .env.localnet and set contract addresses after deployment
+| Setting | Value | Why |
+|---|---|---|
+| Image tag | `QUICKSTART_IMAGE_TAG` (default `soroban-latest`) | Pin to a digest for reproducible CI; use `soroban-latest` for local dev |
+| Services | `--enable core,horizon,rpc` | Explicit — replaces the deprecated `QUICKSTART_SOROBAN=true` env var |
+| Network mode | `--standalone` | Private chain with fast ledger closes and built-in Friendbot |
+| Protocol version | `--protocol-version` (default `21`) | Matches current mainnet to catch protocol-level incompatibilities early |
+| Health check | `getNetwork` JSON-RPC probe every 10 s, `start_period` 90 s | Quickstart boots core → horizon → rpc via supervisord; 90 s avoids false failures on slow hosts |
+| CPU limit | `QUICKSTART_CPUS` (default `2.0`) | Prevents the container from monopolising the developer machine |
+| Memory limit | `QUICKSTART_MEMORY` (default `2G`) | Soroban RPC keeps a ledger DB in memory; 2 GB is comfortable |
+| Volume cap | `SOROBAN_DATA_SIZE` (default `2g`) | Bounds disk growth from a long-running local chain |
+| Network | named bridge `mux-network` | Isolates the node from other Docker projects |
+
+#### Environment configuration
+
+See [`.env.localnet.example`](.env.localnet.example) for the full variable reference.
+Key variables:
+
+```
+QUICKSTART_IMAGE_TAG   Image tag or digest (default: soroban-latest)
+PROTOCOL_VERSION       Soroban protocol version to activate (default: 21)
+QUICKSTART_CPUS        CPU limit for the container (default: 2.0)
+QUICKSTART_MEMORY      Memory limit for the container (default: 2G)
+SOROBAN_DATA_DRIVER    Volume driver: local (persist) or tmpfs (ephemeral CI)
+SOROBAN_DATA_SIZE      Volume size cap (default: 2g)
+LOCALNET_RPC_URL       RPC base URL consumed by tests (default: http://localhost:8000)
+LOCALNET_MUX_*_ID     Contract addresses — populate after deployment
 ```
 
-**Local contract invocation helper:**
+#### Storage and TTL notes
 
-A local invoke helper is available through the bindings package and can be run from the repo root:
+Soroban ledger entries expire after a TTL (the Mux contracts default to ~30 days).
+On a long-running local node, extend TTLs with the Stellar CLI before they
+expire:
+
+```bash
+stellar contract extend \
+  --id $LOCALNET_MUX_ACCOUNT_ID \
+  --ledgers-to-extend 518400 \
+  --source <KEEPER_SECRET> \
+  --network localnet
+```
+
+Repeat for every contract ID. Run at least once every 25 days. See
+[`docs/storage-griefing.md`](docs/storage-griefing.md) for per-contract
+collection caps and the full keeper runbook.
+
+#### Local contract invocation helper
 
 ```bash
 bash scripts/local-invoke.sh --contract-name mux-account --function owner --secret-key S... --arg true
@@ -274,23 +323,42 @@ Supported options:
 - `--arg <value>` — argument values; repeatable
 - `--simulate-only` — simulate without submitting
 
+**Post-deploy smoke checks** (simulate-only reads across core contracts):
+
+```bash
+bash scripts/local-invoke-smoke.sh --secret-key S... --network localnet
+# List planned checks without RPC:
+bash scripts/local-invoke-smoke.sh --dry-run
+```
+
 If dependencies are not installed, run:
 
 ```bash
 cd bindings && npm ci
 ```
 
-**Deploying Contracts to Localnet:**
+#### Deploying contracts to localnet
 
-After starting the localnet, build and deploy contracts:
+After the localnet is healthy, build and deploy all contracts:
+
 ```bash
-# Build contracts
+# Build WASM artifacts
 cargo build --target wasm32-unknown-unknown --release --workspace
 
-# Use Stellar CLI to deploy (requires `stellar` CLI installed)
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/mux_account.wasm
-# ... repeat for other contracts and save the contract IDs to .env.localnet
+# Deploy each contract (requires `stellar` CLI installed)
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/mux_account.wasm \
+  --source <DEPLOYER_SECRET> \
+  --network localnet
+
+# Save the returned contract ID to .env.localnet:
+# LOCALNET_MUX_ACCOUNT_ID=C...
+# Repeat for: mux-batcher, mux-permissions, mux-spending-policy,
+#             mux-registry, mux-wallet-registry, mux-delegation,
+#             mux-recovery, mux-policy, mux-account-factory
 ```
+
+See the [Deploying Contracts](#deploying-contracts) section above for the full deploy workflow.
 
 ## Documentation
 
@@ -306,11 +374,31 @@ stellar contract deploy --wasm target/wasm32-unknown-unknown/release/mux_account
 - [Access Control Review Checklist](docs/access-control-checklist.md) — pre-deployment and pre-audit checklist
 - [Storage Griefing Notes](docs/storage-griefing.md) — collection caps, TTL management, keeper runbook
 - [External Audit Prep](docs/audit-prep.md) — scope, entry points, known limitations, auditor checklist
+- [Error Codes Reference](docs/error_codes.md) — all contract error codes and HTTP mappings
+- [Bindings Error Mapping](docs/bindings-error-mapping.md) — how Rust error enums flow to TS unions and HTTP statuses
 
-To report a vulnerability, open a private security advisory on GitHub.
+## Security
+
+See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy and
+safe-harbor guidelines.
+
+To report a vulnerability, open a private security advisory on GitHub or email
+**security@mux-protocol.xyz**.
+
+## Testing & coverage
+
+```bash
+cargo test --workspace --all-features
+make coverage                          # LLVM coverage, or stub if tools missing
+bash scripts/coverage.sh --stub        # print coverage report stub only
+bash scripts/test-coverage.sh          # validate stub lists all mux-* crates
+```
+
+`Cargo.lock` is committed — see [CONTRIBUTING.md](CONTRIBUTING.md#cargolock-policy).
 
 ## Contributing
 
+- [CONTRIBUTING.md](CONTRIBUTING.md) — commit conventions, PR process, contract PR guidelines
 - [Breaking Change Policy](docs/BREAKING_CHANGES.md) — guidelines for backward compatibility, deprecation periods, and versioning
 
 ## License

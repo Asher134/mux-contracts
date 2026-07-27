@@ -4,6 +4,12 @@
  * Provides delegated signing, guardian management, and spending limits
  * on top of a Stellar Soroban account.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types (`Vec`, `Map`, `String`)
+ * which are backed by the Soroban host and do not require a Rust allocator.
+ *
  * ## Upgrade Migration Notes
  *
  * When upgrading this contract to a new version:
@@ -619,6 +625,51 @@ mod tests {
     }
 
     #[test]
+    fn test_double_initialize_returns_already_initialized_error() {
+        let (env, client, owner) = setup();
+        let guardians: Vec<Address> = Vec::new(&env);
+        client.initialize(&owner, &guardians);
+        let result = client.try_initialize(&owner, &guardians);
+        assert_eq!(
+            result,
+            Err(Ok(MuxAccountError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_with_different_owner_returns_already_initialized() {
+        let (env, client, owner) = setup();
+        let guardians: Vec<Address> = Vec::new(&env);
+        client.initialize(&owner, &guardians);
+        let other_owner = Address::generate(&env);
+        let result = client.try_initialize(&other_owner, &guardians);
+        assert_eq!(
+            result,
+            Err(Ok(MuxAccountError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_with_guardians_returns_already_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let client = MuxAccountClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        let guardians = soroban_sdk::vec![&env, g1, g2];
+        client.initialize(&owner, &guardians);
+        // Second init with different guardians still fails with AlreadyInitialized.
+        let new_guardians = soroban_sdk::vec![&env, Address::generate(&env)];
+        let result = client.try_initialize(&owner, &new_guardians);
+        assert_eq!(
+            result,
+            Err(Ok(MuxAccountError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
     fn test_set_and_remove_delegate() {
         let (env, client, owner) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
@@ -829,6 +880,28 @@ mod tests {
         };
         let result = client.try_set_metadata(&meta);
         assert!(result.is_err());
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    /// All contract tag and action symbols must be <= 8 bytes so that
+    /// `symbol_short!` produces valid Soroban symbols.
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_acct")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("dlg_set"),
+            symbol_short!("dlg_rm"),
+            symbol_short!("lmt_set"),
+            symbol_short!("debited"),
+            symbol_short!("ses_exe"),
+            symbol_short!("meta_set"),
+            symbol_short!("unpaused"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }
 pub mod smart_wallet;

@@ -4,6 +4,11 @@
  * Implements a role-based access control (RBAC) registry that other Mux
  * contracts can call to verify caller permissions before executing
  * privileged operations.
+ *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
  */
 
 #![no_std]
@@ -581,6 +586,34 @@ mod tests {
     }
 
     #[test]
+    fn test_double_initialize_returns_already_initialized_error() {
+        let (env, client, _admin) = setup();
+        let other = Address::generate(&env);
+        let result = client.try_initialize(&other);
+        assert_eq!(
+            result,
+            Err(Ok(MuxPermissionsError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_after_setup_returns_already_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxPermissions);
+        let client = MuxPermissionsClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        // First init succeeds.
+        assert!(client.try_initialize(&admin).is_ok());
+        // Second init with the same admin must return AlreadyInitialized.
+        let result = client.try_initialize(&admin);
+        assert_eq!(
+            result,
+            Err(Ok(MuxPermissionsError::AlreadyInitialized))
+        );
+    }
+
+    #[test]
     fn test_ttl_extended_on_write() {
         // Verify that initialize bumps instance TTL (T-21 mitigation).
         // setup() calls initialize; if extend_ttl was missing the SDK would
@@ -815,5 +848,28 @@ mod integration_tests {
         client.create_role(&role, &Vec::new(&env));
         let members = client.get_role_members(&role);
         assert_eq!(members.len(), 0);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [symbol_short!("mux_perm")];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("role_crt"),
+            symbol_short!("role_grt"),
+            symbol_short!("role_rev"),
+            symbol_short!("perm_ok"),
+            symbol_short!("perm_den"),
+            symbol_short!("adm_thr"),
+            symbol_short!("adm_prp"),
+            symbol_short!("adm_apr"),
+            symbol_short!("adm_prm"),
+            symbol_short!("meta_set"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }
