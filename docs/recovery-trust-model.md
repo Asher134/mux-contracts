@@ -96,11 +96,25 @@ Every state mutation emits a structured event:
 | Entrypoint | Event topic | Data |
 |---|---|---|
 | `initialize` | `init` | `owner: Address` |
-| `initiate_recovery` | `rec_init` | `(guardian, new_owner, executable_at)` |
-| `execute_recovery` | `rec_exec` | `new_owner: Address` |
-| `cancel_recovery` | `rec_cncl` | `owner: Address` |
+| `initiate_recovery` | `rec_init` | `(guardian: Address, new_owner: Address)` |
+| `execute_recovery` | `rec_exec` | `(guardian: Address, new_owner: Address)` |
+| `cancel_recovery` | `rec_cncl` | `()` |
+| `set_registry` | `reg_link` | `registry_id: Address` |
+
+> **Note:** For `rec_init`, `executable_at` is derived from the ledger sequence at initiation time plus `RECOVERY_TIMELOCK`. It is not stored directly in the event data but can be computed from the on-chain ledger context.
 
 Off-chain watchers should subscribe to `rec_init` events and alert the owner immediately.
+
+### 4.6 Registry Link
+
+The recovery contract supports an optional `registry_id` field that links the deployment to a specific `mux-registry` instance.
+
+- **Purpose:** When set, off-chain tooling can cross-reference the registry metadata (e.g. contract version, audit status) against the deployed recovery contract to confirm authenticity.
+- **Optional field:** `registry_id()` returns `None` if the registry link has not been set. The contract operates normally without it.
+- **Owner-gated:** Setting the registry requires `owner.require_auth()`. Guardians and other callers cannot modify the link.
+- **Auditability:** Calling `set_registry` emits a `reg_link` event containing the registry address, so the linkage is fully observable on-chain.
+
+> **Upcoming:** The `set_registry()` entrypoint and `registry_id` storage are tracked in issue [#403](https://github.com/mux-labs/mux-contracts/issues/403).
 
 ---
 
@@ -122,11 +136,14 @@ Off-chain watchers should subscribe to `rec_init` events and alert the owner imm
 - **No quorum threshold.** Currently any single guardian can initiate and execute recovery. A future version should require M-of-N guardian signatures.
 - **Immutable guardian set.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
 - **No guardian liveness check.** If all guardians lose their keys, recovery is impossible.
+- **No on-chain registry validation.** The `registry_id` field stores an address but does not call the registry at initialization time. Off-chain tooling must verify the link is correct and that the registry entry matches the deployed contract.
+- **Single-signer guardian model.** Each guardian acts independently — there is no on-chain M-of-N threshold enforced per-signature. Any single guardian can initiate and execute recovery on their own. A multi-signature threshold requirement is a planned future improvement.
 
 ---
 
 ## 7. Related Documents
 
 - [`docs/threat-model.md`](threat-model.md) — overall Mux Protocol threat model
-- [`docs/audit-events.md`](audit-events.md) — event schema reference
+- [`docs/audit-events.md`](audit-events.md) — full event schema reference
 - [`contracts/mux-recovery/src/lib.rs`](../contracts/mux-recovery/src/lib.rs) — contract source
+- `#403` — Recovery registry link implementation; tracks the `set_registry()` entrypoint and `registry_id` storage
