@@ -724,6 +724,7 @@ name = "mux-account-factory"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "soroban-test-helpers",
 ]
 
 [[package]]
@@ -731,6 +732,16 @@ name = "mux-batcher"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+]
+
+[[package]]
+name = "mux-contract-tests"
+version = "0.1.0"
+dependencies = [
+ "mux-account",
+ "mux-batcher",
+ "soroban-sdk",
+ "soroban-test-helpers",
 ]
 
 [[package]]

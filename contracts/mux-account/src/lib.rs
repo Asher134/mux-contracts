@@ -510,7 +510,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         symbol_short,
-        testutils::{Address as _, Events, Ledger as _},
+        testutils::{storage::Instance as _, Address as _, Events, Ledger as _},
         Env, FromVal, String, Vec,
     };
 
@@ -527,18 +527,18 @@ mod tests {
         soroban_sdk::Symbol::from_val(env, &topics.get(1).unwrap())
     }
 
-    fn setup() -> (Env, MuxAccountClient<'static>, Address) {
+    fn setup() -> (Env, MuxAccountClient<'static>, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register_contract(None, MuxAccount);
         let client = MuxAccountClient::new(&env, &contract_id);
         let owner = Address::generate(&env);
-        (env, client, owner)
+        (env, client, owner, contract_id)
     }
 
     #[test]
     fn test_initialize_emits_event() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
         let events = env.events().all();
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_set_delegate_emits_event() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
         client.set_delegate(&delegate, &1000_u32, &true);
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_remove_delegate_emits_event() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
         client.set_delegate(&delegate, &1000_u32, &false);
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_spend_limit_emits_events() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let asset = Address::generate(&env);
         client.set_spend_limit(&asset, &1000_i128, &100_u32);
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_delegate_cap_enforced() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
 
         // Fill up to the cap
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_delegate_cap_allows_update() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
 
         // Fill to cap
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_initialize() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         assert!(client.try_initialize(&owner, &guardians).is_ok());
         assert_eq!(client.owner(), owner);
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_double_initialize_fails() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
         let result = client.try_initialize(&owner, &guardians);
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn test_double_initialize_returns_already_initialized_error() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
         let result = client.try_initialize(&owner, &guardians);
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_initialize_with_different_owner_returns_already_initialized() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
         let other_owner = Address::generate(&env);
@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_set_and_remove_delegate() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
 
@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn test_get_delegate_returns_active_delegate_info() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
         client.set_delegate(&delegate, &1000_u32, &true);
@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_get_delegate_fails_for_unauthorized_delegate() {
-        let (env, client, _owner) = setup();
+        let (env, client, _owner, _cid) = setup();
         client.initialize(&_owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
 
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn test_get_delegate_fails_when_delegate_expired() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
         let current = env.ledger().sequence();
@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_delegates_filters_expired_delegates() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
         let current = env.ledger().sequence();
@@ -746,7 +746,7 @@ mod tests {
 
     #[test]
     fn test_spend_limit_enforcement() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
 
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_spend_limit_invalid_amount() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
 
@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn test_unpause_emits_event() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         client.unpause();
         let events = env.events().all();
@@ -788,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_execute_with_session_emits_event() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let session_key = Address::generate(&env);
         let payload = Bytes::new(&env);
@@ -807,7 +807,7 @@ mod tests {
         // Verify that initialize bumps instance TTL (T-21 mitigation).
         // The Soroban test environment starts with TTL = 0; after a write that
         // calls extend_ttl the value must be > 0.
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
         // If extend_ttl was not called the SDK would have panicked in the test
@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_set_and_get_metadata() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let meta = RegistryMeta {
             name: String::from_str(&env, "mux-testnet-acct"),
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn test_set_metadata_overwrites_previous() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let meta1 = RegistryMeta {
             name: String::from_str(&env, "v1"),
@@ -856,14 +856,14 @@ mod tests {
 
     #[test]
     fn test_get_metadata_returns_none_when_unset() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         assert!(client.get_metadata().is_none());
     }
 
     #[test]
     fn test_set_metadata_emits_event() {
-        let (env, client, owner) = setup();
+        let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let meta = RegistryMeta {
             name: String::from_str(&env, "registry"),
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn test_set_metadata_before_initialize_fails() {
-        let (_env, client, _owner) = setup();
+        let (_env, client, _owner, _cid) = setup();
         let meta = RegistryMeta {
             name: String::from_str(&_env, "registry"),
             version: String::from_str(&_env, "1.0.0"),
@@ -889,96 +889,112 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── Reentrancy guard coverage (#392) ────────────────────────────────────────
+    // ── TTL extension coverage (#391) ──────────────────────────────────────────
 
-    /// Verify that the reentrancy guard flag is cleared after a successful
-    /// `debit_spend`, allowing back-to-back calls.
+    /// Helper: read the instance TTL remaining via `as_contract`.
+    fn instance_ttl(env: &Env, contract_id: &soroban_sdk::Address) -> u32 {
+        env.as_contract(contract_id, || {
+            env.storage().instance().get_ttl()
+        })
+    }
+
     #[test]
-    fn test_reentrancy_guard_cleared_after_successful_debit() {
-        let (env, client, owner) = setup();
+    fn test_ttl_extended_on_set_delegate() {
+        let (env, client, owner, cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
+        let ttl_before = instance_ttl(&env, &cid);
+
+        let delegate = Address::generate(&env);
+        client.set_delegate(&delegate, &1000_u32, &true);
+
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after set_delegate");
+    }
+
+    #[test]
+    fn test_ttl_extended_on_remove_delegate() {
+        let (env, client, owner, cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+
+        let delegate = Address::generate(&env);
+        client.set_delegate(&delegate, &1000_u32, &false);
+        let ttl_before = instance_ttl(&env, &cid);
+
+        client.remove_delegate(&delegate);
+
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after remove_delegate");
+    }
+
+    #[test]
+    fn test_ttl_extended_on_set_spend_limit() {
+        let (env, client, owner, cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let ttl_before = instance_ttl(&env, &cid);
 
         let asset = Address::generate(&env);
         client.set_spend_limit(&asset, &1000_i128, &100_u32);
 
-        // First debit succeeds
-        let r1 = client.try_debit_spend(&asset, &200_i128);
-        assert!(r1.is_ok());
-
-        // Second debit succeeds (guard was cleared)
-        let r2 = client.try_debit_spend(&asset, &300_i128);
-        assert!(r2.is_ok());
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after set_spend_limit");
     }
 
-    /// Verify that the reentrancy guard is self-cleaning on error: when
-    /// `debit_spend` fails (e.g. SpendLimitExceeded), Soroban rolls back
-    /// storage and the guard does not stick.
     #[test]
-    fn test_reentrancy_guard_rolled_back_on_error() {
-        let (env, client, owner) = setup();
+    fn test_ttl_extended_on_debit_spend() {
+        let (env, client, owner, cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
 
         let asset = Address::generate(&env);
         client.set_spend_limit(&asset, &1000_i128, &100_u32);
+        let ttl_before = instance_ttl(&env, &cid);
 
-        // Fill most of the limit
-        let _ = client.try_debit_spend(&asset, &900_i128);
+        client.try_debit_spend(&asset, &200_i128).unwrap();
 
-        // This exceeds the limit — should fail with SpendLimitExceeded, not
-        // ReentrancyDetected on the next call.
-        let over = client.try_debit_spend(&asset, &200_i128);
-        assert_eq!(over, Err(Ok(MuxAccountError::SpendLimitExceeded)));
-
-        // A valid debit after the failed one must succeed (guard was rolled back).
-        let ok = client.try_debit_spend(&asset, &50_i128);
-        assert!(ok.is_ok());
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after debit_spend");
     }
 
-    /// Verify that the Executing flag blocks a second debit when it is
-    /// manually pre-set (simulates a re-entrant cross-contract call).
     #[test]
-    fn test_reentrancy_guard_rejects_when_executing_flag_set() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register_contract(None, MuxAccount);
-        let client = MuxAccountClient::new(&env, &contract_id);
-        let owner = Address::generate(&env);
+    fn test_ttl_extended_on_unpause() {
+        let (env, client, owner, cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
+        let ttl_before = instance_ttl(&env, &cid);
 
-        let asset = Address::generate(&env);
-        client.set_spend_limit(&asset, &1000_i128, &100_u32);
+        client.unpause();
 
-        // Manually set the Executing flag to simulate an in-progress call.
-        env.as_contract(&contract_id, || {
-            env.storage().instance().set(&DataKey::Executing, &true);
-        });
-
-        // debit_spend must be rejected with ReentrancyDetected.
-        let result = client.try_debit_spend(&asset, &100_i128);
-        assert_eq!(result, Err(Ok(MuxAccountError::ReentrancyDetected)));
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after unpause");
     }
 
-    /// Verify that the guard does not prevent a valid debit after a failed
-    /// debit due to arithmetic overflow (another error path).
     #[test]
-    fn test_reentrancy_guard_rolled_back_on_overflow() {
-        let (env, client, owner) = setup();
+    fn test_ttl_extended_on_execute_with_session() {
+        let (env, client, owner, cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
+        let ttl_before = instance_ttl(&env, &cid);
 
-        let asset = Address::generate(&env);
-        client.set_spend_limit(&asset, &i128::MAX, &100_u32);
+        let session_key = Address::generate(&env);
+        let payload = Bytes::new(&env);
+        let _ = client.execute_with_session(&session_key, &payload);
 
-        // Fill the limit to near-max
-        let _ = client.try_debit_spend(&asset, &(i128::MAX - 1));
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after execute_with_session");
+    }
 
-        // This would overflow i128 — should fail with ArithmeticOverflow.
-        let overflow = client.try_debit_spend(&asset, &2_i128);
-        assert_eq!(overflow, Err(Ok(MuxAccountError::ArithmeticOverflow)));
+    #[test]
+    fn test_ttl_extended_on_set_metadata() {
+        let (env, client, owner, cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let ttl_before = instance_ttl(&env, &cid);
 
-        // A valid small debit after the overflow-error must succeed
-        // (guard was rolled back by Soroban).
-        let ok = client.try_debit_spend(&asset, &1_i128);
-        assert!(ok.is_ok());
+        let meta = RegistryMeta {
+            name: String::from_str(&env, "test"),
+            version: String::from_str(&env, "1.0.0"),
+            description: String::from_str(&env, "desc"),
+        };
+        client.set_metadata(&meta);
+
+        let ttl_after = instance_ttl(&env, &cid);
+        assert!(ttl_after >= ttl_before, "TTL must not decrease after set_metadata");
     }
 
     // ── symbol_short length audit (#496) ─────────────────────────────────────

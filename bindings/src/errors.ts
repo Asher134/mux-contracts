@@ -53,22 +53,28 @@ type ContractError =
  *   InvalidAccount    (2) → 400  account_address must differ from owner
  *   TooManyAccounts   (3) → 409  per-owner 64-account cap reached
  *   MetadataNotFound  (4) → 404  no metadata stored for the account
+ *
+ * MuxDelegation error codes (contracts/mux-delegation):
+ *   NotADelegate       (6001) → 404
+ *   TooManyPermissions (6002) → 400
+ *   EmptyPermissions   (6003) → 400
+ *   TooManyDelegates   (6004) → 409
  */
 export const ERROR_HTTP_MAP: Record<string, number> = {
   // Authentication/Authorization errors → 401
-  // Covers: MuxAccountError, MuxAccountFactoryError::Unauthorized (code 1)
   Unauthorized: 401,
 
   // Not Found errors → 404
-  NotADelegate: 404,
+  NotADelegate: 404,       // MuxDelegationError (6001): no grant for (owner, delegate)
   DelegateNotFound: 404,
   RoleNotFound: 404,
   AccountNotInRole: 404,
   PermissionNotFound: 404,
   ContractNotFound: 404,
   WalletNotFound: 404,
-  MetadataNotFound: 404,
+  MetadataNotFound: 404,   // MuxAccountFactoryError (4)
   AdminNotFound: 404,
+  LimitNotFound: 404,
 
   // Validation/Constraint errors → 400
   InvalidAmount: 400,
@@ -78,40 +84,29 @@ export const ERROR_HTTP_MAP: Record<string, number> = {
   DelegateExpired: 400,
   EmptyBatch: 400,
   BatchTooLarge: 400,
-  // MuxAccountFactoryError::InvalidAccount (code 2)
   InvalidAccount: 400,
   MetadataTooLarge: 400,
 
   // Delegation constraint errors → 400
+  // MuxDelegationError::TooManyPermissions (6002) and ::EmptyPermissions (6003)
   TooManyPermissions: 400,
   EmptyPermissions: 400,
 
   // State conflict → 409
   AlreadyInitialized: 409,
+  AlreadyApproved: 409,
 
-  // Security guard violations → 409 Conflict (concurrent/reentrant call)
+  // Security guard violations → 409
   ReentrancyDetected: 409,
 
-  // Policy errors → 400 Bad Request
-  LimitNotFound: 404,
-
-  // Capacity limits → 409 Conflict
-  // MuxAccountError::TooManyDelegates (code 9)
+  // Capacity limits → 409
   TooManyDelegates: 409,
-  // MuxAccountFactoryError::TooManyAccounts (code 3)
   TooManyAccounts: 409,
   TooManyContracts: 409,
-  TooManyDelegates: 409,
   TooManyMembers: 409,
   TooManyRoles: 409,
   TooManyWallets: 409,
   TooManySessionKeys: 409,
-
-  // MuxAccountFactoryError::MetadataNotFound (code 4)
-  MetadataNotFound: 404,
-
-  // Wallet registry not-found → 404
-  WalletNotFound: 404,
 
   // Internal/Uninitialized → 500
   NotInitialized: 500,
@@ -142,5 +137,5 @@ export function isContractError(error: unknown): error is string {
   if (typeof error !== "string") {
     return false;
   }
-  return error in ERROR_HTTP_MAP || true; // Conservative: treat any string as potential error
+  return error in ERROR_HTTP_MAP || true;
 }
