@@ -45,6 +45,31 @@ Legend:
 - [ ] `has_permission`, `get_roles`, `get_role_members` — read-only; no auth required (acceptable).
 - [ ] No role mutation is possible without admin signature.
 
+### 1.4 `mux-policy`
+
+- [ ] `initialize` — `admin.require_auth()` called before storage write.
+- [ ] `set_daily_limit` — `require_admin` helper called; only admin can configure limits.
+- [ ] `record_spend` — `wallet.require_auth()` called before any storage write; third parties cannot debit a wallet's allowance.
+- [ ] `reset_daily_counter` — `require_admin` helper called; only admin can perform emergency resets.
+- [ ] `upgrade` — `require_admin` helper called; WASM upgrade is admin-gated.
+- [ ] No policy mutation is possible without the correct authorization.
+
+### 1.5 `mux-registry`
+
+- [ ] `initialize` — `admin.require_auth()` called before storage write.
+- [ ] `register` — `require_admin` helper called.
+- [ ] `register_with_metadata` — `require_admin` helper called.
+- [ ] `get_version`, `get_metadata`, `list_contracts`, `check_version` — read-only; no auth required (acceptable).
+- [ ] No registry mutation is possible without admin signature.
+
+### 1.6 `mux-recovery`
+
+- [ ] `initialize` — `owner.require_auth()` called before storage write.
+- [ ] `initiate_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
+- [ ] `cancel_recovery` — `require_owner` helper called; only current owner can cancel.
+- [ ] `execute_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
+- [ ] No recovery mutation is possible without guardian or owner authorization.
+
 ---
 
 ## 2. Initialization Guards
@@ -121,6 +146,29 @@ See [docs/storage-griefing.md](storage-griefing.md) for full details.
 
 ---
 
+## 7a. Panic-Free Error Paths
+
+- [ ] **No bare `.unwrap()` on storage reads.** Every `env.storage().*().get(...)` uses `.ok_or(Error::Variant)` or `.unwrap_or(default)`. Bare `.unwrap()` on a missing key would panic post-deployment.
+- [ ] **No bare `.expect(...)` on fallible operations.** Replace with `.ok_or(Error)` or pattern matching.
+- [ ] **Checked arithmetic on all user-controlled values.** `spent + amount` uses `checked_add().ok_or(Error)?`. Subtraction uses `checked_sub()` or `saturating_sub()`. The workspace `Cargo.toml` sets `overflow-checks = true` but contracts should not rely on this as a substitute for explicit checks.
+- [ ] **No `panic!`, `unreachable!`, or `unimplemented!` in production paths.** These macros are acceptable in `#[cfg(test)]` code only.
+- [ ] **`Vec::get(idx)` is bounds-checked.** Soroban SDK `Vec::get` panics on out-of-bounds access; always verify `idx < vec.len()` first or use `.try_get()`.
+- [ ] **`require_auth()` failures propagate as host errors**, not contract panics. This is safe because the SDK handles auth failures internally.
+- [ ] **No implicit integer truncation.** `u32` / `i128` conversions use `.try_into()` or explicit casts with overflow guards.
+- [ ] **All error paths are tested.** Every `Err(...)` variant returned by a public function has at least one `try_*` test that asserts the error variant.
+
+### Quick audit commands
+
+```bash
+# Find bare .unwrap() in contract source (exclude tests)
+rg '\.unwrap\(\)' contracts/*/src/lib.rs | grep -v '#\[cfg(test)\]' | grep -v '// '
+
+# Find panic!/unreachable!/unimplemented! in non-test code
+rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg(test)\]'
+```
+
+---
+
 ## 8. Unit Test Coverage
 
 - [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period.
@@ -150,11 +198,74 @@ See [docs/storage-griefing.md](storage-griefing.md) for full details.
 - [ ] Contract IDs recorded in `bindings/src/network.ts` for the correct network.
 - [ ] `stellar contract invoke` smoke-test run against testnet deployment before mainnet.
 - [ ] Upgrade authority (if any) is a timelocked multisig — documented and reviewed.
-- [ ] No `#[cfg(test)]` code or `testutils` feature enabled in the release WASM (verify with `wasm-objdump`).
+- [ ] No `#[cfg(test)]` code or `testutils` feature enabled in the release WASM (run `make check-no-testutils` / see [no-testutils-wasm.md](no-testutils-wasm.md)).
 
 ---
 
-## 11. Sign-off
+## 11. Authorization Flow Examples
+
+### Owner → Delegate → Spend (mux-account)
+
+```
+1. Owner calls initialize(owner, guardians)
+   └─ owner.require_auth() ✓
+   └─ Storage: Owner, Delegates={}, GuardianSet, Nonce=0
+
+2. Owner calls set_delegate(delegate, expiry, can_spend=true)
+   └─ require_owner() → owner.require_auth() ✓
+   └─ Storage: Delegates[delegate] = DelegateInfo{expiry, can_spend}
+
+3. Delegate calls debit_spend(asset, amount)
+   └─ current_contract_address().require_auth() (contract-internal only)
+   └─ Checks: not paused, not re-entered, limit not exceeded
+   └─ Storage: SpendLimit(asset).spent += amount
+```
+
+### Policy Record Spend (mux-policy)
+
+```
+1. Admin calls set_daily_limit(wallet, limit, day_ledgers)
+   └─ require_admin() → admin.require_auth() ✓
+   └─ Storage: WalletLimit(wallet) = DailyLimit{limit, spent=0, ...}
+
+2. Wallet calls record_spend(wallet, amount)
+   └─ wallet.require_auth() ✓  ← only the wallet itself can debit
+   └─ Checks: limit exists, amount > 0, spent + amount <= limit
+   └─ Storage: WalletLimit(wallet).spent += amount
+   └─ Third-party call fails: wallet A cannot record_spend for wallet B
+```
+
+### Registry Registration (mux-registry)
+
+```
+1. Admin calls register(name, version)
+   └─ require_admin() → admin.require_auth() ✓
+   └─ Checks: Names.len < 128 (TooManyContracts if exceeded)
+   └─ Storage: Names.push(name), Version(name) = version
+
+2. Anyone calls get_version(name) — read-only, no auth needed
+```
+
+### Recovery Timelock (mux-recovery)
+
+```
+1. Guardian calls initiate_recovery(guardian, new_owner)
+   └─ guardian.require_auth() ✓ + require_guardian() ✓
+   └─ Storage: Recovery = RecoveryRequest{Pending, executable_at}
+
+2. Owner calls cancel_recovery()  [within timelock window]
+   └─ require_owner() → owner.require_auth() ✓
+   └─ Storage: Recovery.status = Cancelled
+
+3. Guardian calls execute_recovery(guardian)  [after timelock]
+   └─ guardian.require_auth() ✓ + require_guardian() ✓
+   └─ Checks: status == Pending, current_ledger >= executable_at
+   └─ Storage: Owner = new_owner
+```
+
+---
+
+## 12. Sign-off
 
 | Reviewer | Role | Date | Result |
 |---|---|---|---|
