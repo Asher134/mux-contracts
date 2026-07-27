@@ -104,6 +104,11 @@ Errors are defined in `RecoveryError` (`contracts/mux-recovery/src/lib.rs`).
 | `RecoveryAlreadyPending` | 4 | 409 | A recovery request is already pending for this account |
 | `NoActiveRecovery` | 5 | 404 | No recovery request found with the given ID |
 | `TimelockNotExpired` | 6 | 400 | Recovery timelock has not yet elapsed |
+| `TooManyGuardians` | 7 | 409 | Guardian cap (16) reached |
+| `GuardianAlreadyExists` | 8 | 409 | Address is already a registered guardian |
+| `GuardianNotFound` | 9 | 404 | Address is not a registered guardian |
+| `MinGuardiansRequired` | 10 | 400 | Cannot remove the last remaining guardian |
+| `RecoveryExpired` | 11 | 400 | Recovery execution window has elapsed |
 
 ## Mux Registry (`contracts/mux-registry`)
 

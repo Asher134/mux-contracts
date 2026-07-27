@@ -112,6 +112,7 @@ pub enum RecoveryError {
     GuardianAlreadyExists = 8,
     GuardianNotFound = 9,
     MinGuardiansRequired = 10,
+    RecoveryExpired = 11,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
@@ -178,7 +179,19 @@ impl MuxRecovery {
             status: RecoveryStatus::Pending,
         };
         env.storage().instance().set(&DataKey::Recovery, &request);
-        emit(&env, symbol_short!("rec_init"), (guardian, new_owner));
+        // Carry the timelock window in the payload so indexers can surface the
+        // execute/expiry deadlines without a follow-up storage read.
+        emit(
+            &env,
+            symbol_short!("rec_init"),
+            (
+                guardian,
+                new_owner,
+                request.initiated_at,
+                request.executable_at,
+                request.expires_at,
+            ),
+        );
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -216,6 +229,53 @@ impl MuxRecovery {
         env.storage().instance().set(&DataKey::Owner, &new_owner);
         env.storage().instance().set(&DataKey::Recovery, &request);
         emit(&env, symbol_short!("rec_exec"), (guardian, new_owner));
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Add a guardian to the guardian set. Owner only.
+    ///
+    /// The set is capped at `MAX_GUARDIANS` to bound instance-storage growth.
+    pub fn add_guardian(env: Env, guardian: Address) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        let mut guardians: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardians)
+            .ok_or(RecoveryError::NotInitialized)?;
+        if guardians.contains(&guardian) {
+            return Err(RecoveryError::GuardianAlreadyExists);
+        }
+        if guardians.len() >= MAX_GUARDIANS {
+            return Err(RecoveryError::TooManyGuardians);
+        }
+        guardians.push_back(guardian.clone());
+        env.storage().instance().set(&DataKey::Guardians, &guardians);
+        emit(&env, symbol_short!("grd_add"), guardian);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Remove a guardian from the guardian set. Owner only.
+    ///
+    /// At least one guardian must always remain, otherwise recovery would
+    /// become permanently unreachable.
+    pub fn remove_guardian(env: Env, guardian: Address) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        let mut guardians: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardians)
+            .ok_or(RecoveryError::NotInitialized)?;
+        let index = guardians
+            .first_index_of(&guardian)
+            .ok_or(RecoveryError::GuardianNotFound)?;
+        if guardians.len() <= 1 {
+            return Err(RecoveryError::MinGuardiansRequired);
+        }
+        guardians.remove(index);
+        env.storage().instance().set(&DataKey::Guardians, &guardians);
+        emit(&env, symbol_short!("grd_rm"), guardian);
         Self::extend_ttl(&env);
         Ok(())
     }
