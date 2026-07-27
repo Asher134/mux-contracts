@@ -10,9 +10,10 @@
  *
  * ## Audit Events
  *
- * This contract emits the following events:
- * - `initialize`: Emitted when the contract is initialized with an admin address.
+ * This contract emits the following events (tag: `mux_spend`):
+ * - `init`: Emitted when the contract is initialized with an admin address.
  * - `lmt_set`: Emitted when a spending limit policy is created or updated.
+ * - `chk_ok`: Emitted when `check_spend` passes — records the allowed spend for auditability.
  *
  * Events can be queried via the Soroban RPC `getEvents` endpoint with contract ID filter.
  */
