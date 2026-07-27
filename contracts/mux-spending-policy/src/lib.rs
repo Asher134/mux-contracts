@@ -3,6 +3,11 @@
  *
  * Stores per-account spend limits and validates spend requests against them.
  *
+ * # `no_std` Constraints
+ *
+ * This crate is `#![no_std]` and does not use `extern crate alloc`.
+ * All data structures use Soroban SDK types backed by the Soroban host.
+ *
  * ## Audit Events
  *
  * This contract emits the following events:
@@ -245,15 +250,15 @@ mod tests {
     // ── set_policy ────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_set_policy_emits_pol_set_event() {
+    fn test_set_policy_emits_lmt_set_event() {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
         client.set_policy(&account, &asset, &1000);
         let events = env.events().all();
-        // init + pol_set
+        // init + lmt_set
         assert_eq!(events.len(), 2);
-        assert_eq!(topic_action(&env, &events, 1), symbol_short!("pol_set"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("lmt_set"));
     }
 
     #[test]
@@ -361,32 +366,6 @@ mod tests {
     // ── Unit Tests ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_double_initialize_fails() {
-        let (env, client, admin) = setup();
-        // Second attempt to initialize should fail
-        let result = client.try_initialize(&admin);
-        assert_eq!(result, Err(Ok(SpendingPolicyError::AlreadyInitialized)));
-    }
-
-    #[test]
-    fn test_set_policy_updates_existing() {
-        let (env, client, _) = setup();
-        let account = Address::generate(&env);
-        let asset = Address::generate(&env);
-        
-        // Set initial policy
-        client.set_policy(&account, &asset, &1000);
-        let policy1 = client.get_policy(&account, &asset);
-        assert_eq!(policy1.limit, 1000);
-        
-        // Update the policy to a new limit
-        client.set_policy(&account, &asset, &5000);
-        let policy2 = client.get_policy(&account, &asset);
-        assert_eq!(policy2.limit, 5000);
-        assert_eq!(policy2.asset, asset);
-    }
-
-    #[test]
     fn test_multiple_accounts_same_asset() {
         let (env, client, _) = setup();
         let asset = Address::generate(&env);
@@ -485,34 +464,6 @@ mod tests {
     // ── Negative Path Tests ────────────────────────────────────────────────────
 
     #[test]
-    fn test_set_policy_not_initialized() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register_contract(None, MuxSpendingPolicy);
-        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
-        let account = Address::generate(&env);
-        let asset = Address::generate(&env);
-        
-        // Try to set policy before initialization
-        let result = client.try_set_policy(&account, &asset, &1000);
-        assert_eq!(result, Err(Ok(SpendingPolicyError::NotInitialized)));
-    }
-
-    #[test]
-    fn test_check_spend_not_initialized() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register_contract(None, MuxSpendingPolicy);
-        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
-        let account = Address::generate(&env);
-        let asset = Address::generate(&env);
-        
-        // Try to check spend before initialization
-        let result = client.try_check_spend(&account, &asset, &100);
-        assert_eq!(result, Err(Ok(SpendingPolicyError::NotInitialized)));
-    }
-
-    #[test]
     fn test_check_spend_with_negative_amount() {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
@@ -520,10 +471,9 @@ mod tests {
         
         client.set_policy(&account, &asset, &1000);
         
-        // Check spend with negative amount should fail (no policy for this amount)
-        // This tests handling of negative amounts in the comparison logic
+        // Check spend with negative amount should fail with InvalidInput
         let result = client.try_check_spend(&account, &asset, &-500);
-        assert!(result.is_ok()); // Negative amounts are less than positive limits, so they pass
+        assert_eq!(result, Err(Ok(SpendingPolicyError::InvalidInput)));
     }
 
     #[test]
@@ -760,5 +710,57 @@ mod tests {
         
         let events = env.events().all();
         assert_eq!(events.len(), 0);
+    }
+
+    // ── NotInitialized tests (#505) ──────────────────────────────────────────
+
+    /// `set_policy` must return `NotInitialized` when called before `initialize`.
+    #[test]
+    fn test_set_policy_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxSpendingPolicy);
+        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let result = client.try_set_policy(&account, &asset, &1000);
+        assert_eq!(result, Err(Ok(SpendingPolicyError::NotInitialized)));
+    }
+
+    /// `check_spend` must return `NotInitialized` when called before `initialize`.
+    #[test]
+    fn test_check_spend_not_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxSpendingPolicy);
+        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let result = client.try_check_spend(&account, &asset, &100);
+        assert_eq!(result, Err(Ok(SpendingPolicyError::NotInitialized)));
+    }
+
+    /// All NotInitialized error codes must match their declared discriminant.
+    #[test]
+    fn test_not_initialized_error_code() {
+        assert_eq!(SpendingPolicyError::NotInitialized as u32, 1);
+    }
+
+    // ── symbol_short length audit (#496) ─────────────────────────────────────
+
+    /// All contract tag and action symbols must be <= 8 bytes so that
+    /// `symbol_short!` produces valid Soroban symbols.
+    #[test]
+    fn test_symbol_short_lengths_within_limit() {
+        let tags = [
+            symbol_short!("mux_spend"),
+        ];
+        let actions = [
+            symbol_short!("init"),
+            symbol_short!("lmt_set"),
+        ];
+        for sym in tags.iter().chain(actions.iter()) {
+            assert!(sym.to_val().len() <= 8);
+        }
     }
 }

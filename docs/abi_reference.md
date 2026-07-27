@@ -32,11 +32,14 @@ pub struct AccountMetadata {
 
 | Method | Args | Returns | Auth | Description |
 |---|---|---|---|---|
-| `deploy_account` | `owner: Address, account_address: Address` | `Result<Address, MuxAccountFactoryError>` | `owner` | Register a new account. Returns the registered address. |
-| `deploy_account_with_metadata` | `owner: Address, account_address: Address, version: String, description: String, author: String` | `Result<Address, MuxAccountFactoryError>` | `owner` | Register a new account and store metadata. |
+| `deploy_account` | `owner: Address, account_address: Address` | `Result<Address, MuxAccountFactoryError>` | `owner` | Register a new account. Returns the registered address. Rejects at `MAX_ACCOUNTS_PER_OWNER`. |
+| `deploy_account_with_metadata` | `owner: Address, account_address: Address, version: String, description: String, author: String` | `Result<Address, MuxAccountFactoryError>` | `owner` | Register a new account and store metadata. Rejects at `MAX_ACCOUNTS_PER_OWNER`. |
 | `get_accounts` | `owner: Address` | `Vec<Address>` | none | Return all accounts registered for `owner`. |
 | `get_account_metadata` | `owner: Address, account_address: Address` | `Result<AccountMetadata, MuxAccountFactoryError>` | none | Return stored metadata for a specific account. |
 | `account_count` | — | `u64` | none | Return the total number of accounts registered across all owners. |
+| `max_accounts_per_owner` | — | `u32` | none | Returns the maximum accounts permitted per owner (64). |
+| `simulate_deploy` | `owner: Address, account_address: Address` | `Result<Address, MuxAccountFactoryError>` | none | Dry-run of `deploy_account` (includes Accounts vec bound). |
+| `simulate_deploy_with_metadata` | `owner: Address, account_address: Address, version: String, description: String, author: String` | `Result<Address, MuxAccountFactoryError>` | none | Dry-run of `deploy_account_with_metadata` (includes Accounts vec bound). |
 
 ### Events
 
@@ -58,6 +61,8 @@ pub struct AccountMetadata {
 - `deploy_account` and `deploy_account_with_metadata` require `owner.require_auth()`.
 - Instance storage TTL is extended on every write (`deploy_account*`); read-only calls do not extend TTL.
 - The per-owner cap of 64 accounts prevents unbounded growth of the `Accounts` storage vector (see `docs/storage-griefing.md`).
+- `simulate_deploy*` enforces the same Accounts vec bound (and metadata size checks) without writing state.
+- Clients can query `max_accounts_per_owner` before deploy to avoid `TooManyAccounts`.
 
 ---
 

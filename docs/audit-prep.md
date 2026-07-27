@@ -254,6 +254,6 @@ Items the audit team should verify independently:
 - [ ] `AlreadyInitialized` guard prevents state overwrite on both contracts.
 - [ ] Instance TTL is extended on every write; no write path skips `extend_ttl`.
 - [ ] No contract reads or writes another contract's storage directly.
-- [ ] Release WASM does not include `testutils` or `#[cfg(test)]` code (verify with `wasm-objdump`).
+- [ ] Release WASM does not include `testutils` or `#[cfg(test)]` code (run `make check-no-testutils`; see [no-testutils-wasm.md](no-testutils-wasm.md)).
 - [ ] Error discriminants start at 1; no variant uses 0.
 - [ ] Known limitations in §6 are acceptable for the current deployment scope.
