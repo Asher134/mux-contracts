@@ -15,7 +15,7 @@ import {
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
-import type { BatchOperationKind, BatchResult, MuxBatcherError, Operation } from "../types";
+import type { BatcherMeta, BatchOperationKind, BatchResult, MuxBatcherError, Operation } from "../types";
 import { pollTransaction } from "../horizon";
 
 export interface MuxBatcherClientOptions {
@@ -95,6 +95,60 @@ export class MuxBatcherClient {
     const retval = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
     if (!retval) throw new Error("No return value");
     return retval.value() as number;
+  }
+
+  /**
+   * Submit a batch on behalf of the transaction invoker. Convenience wrapper
+   * around `executeBatch` that derives the caller from the invoking address,
+   * so callers do not need to pass an explicit `caller` argument.
+   *
+   * Emits the same events as `executeBatch`.
+   */
+  async submitBatch(
+    sourceKeypair: Keypair,
+    ops: Operation[]
+  ): Promise<BatchResult> {
+    const opsVal = xdr.ScVal.scvVec(ops.map(this.operationToScVal));
+    const tx = await this.buildTx(sourceKeypair, "submit_batch", [opsVal]);
+    return this.submitAndRead<BatchResult>(tx, sourceKeypair);
+  }
+
+  /**
+   * Store registry metadata (description, author) for this batcher instance.
+   *
+   * Can only be called once; subsequent calls throw with `MetadataAlreadySet`.
+   * No authorization is required — metadata is informational only and is
+   * expected to be set by the deployer immediately after deployment.
+   */
+  async setRegistryMetadata(
+    sourceKeypair: Keypair,
+    description: string,
+    author: string
+  ): Promise<void> {
+    const tx = await this.buildTx(sourceKeypair, "set_registry_metadata", [
+      nativeToScVal(description, { type: "string" }),
+      nativeToScVal(author, { type: "string" }),
+    ]);
+    await this.submitAndRead<void>(tx, sourceKeypair);
+  }
+
+  /**
+   * Return the registry metadata for this batcher instance, or `null` if not
+   * set. Pure read — no transaction is submitted.
+   */
+  async getRegistryMetadata(sourceKeypair: Keypair): Promise<BatcherMeta | null> {
+    const tx = await this.buildTx(sourceKeypair, "get_registry_metadata", []);
+    const result = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation failed: ${result.error}`);
+    }
+    const retval = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!retval) return null;
+    // On-chain Option<BatcherMeta> — void/unit retval means None.
+    const raw = retval.value();
+    if (raw === undefined || raw === null) return null;
+    const native = raw as { description: string; author: string };
+    return { description: native.description, author: native.author };
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────

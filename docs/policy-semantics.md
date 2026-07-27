@@ -12,14 +12,19 @@ This document describes the design, data model, and behavioral guarantees of the
 
 ```rust
 pub struct DailyLimit {
-    pub limit: i128,        // Maximum amount allowed per day window
-    pub spent: i128,        // Amount spent in the current window
-    pub reset_ledger: u32,  // Ledger sequence at which the window expires
-    pub day_ledgers: u32,   // Window length in ledgers (set at creation)
+    pub limit: i128,                  // Maximum amount allowed per day window
+    pub spent: i128,                  // Amount spent in the current window
+    pub reset_ledger: u32,            // Ledger sequence at which the window expires
+    pub day_ledgers: u32,             // Window length in ledgers (set at creation)
+    pub registry_id: Option<Address>, // Optional registry contract for cross-contract validation
 }
 ```
 
 Storage key: `DataKey::WalletLimit(Address)` — persistent storage, one record per wallet.
+
+The `registry_id` field links this policy record to an external registry contract. It is purely
+informational metadata — the policy contract itself does not call the registry; consumers use the
+field to route cross-contract policy lookups.
 
 ## Day Window
 
@@ -59,6 +64,22 @@ The window expires when `env.ledger().sequence() >= reset_ledger`. At that point
 - Fails with `InvalidAmount` if `amount <= 0`.
 - Fails with `LimitNotFound` if no limit is configured for `wallet`.
 
+### `reset_daily_counter(wallet)` — admin only
+
+- Requires admin authorization via `require_admin()`.
+- Immediately clears `spent` to `0` and starts a fresh window from the current ledger
+  (`reset_ledger = current_ledger + day_ledgers`).
+- Intended for emergency corrections (e.g. a buggy integration double-counted a spend)
+  and for post-upgrade counter resets when the window boundary changes.
+- Fails with `LimitNotFound` if no limit has been configured for `wallet`.
+- Does **not** modify the `limit` or `day_ledgers` fields.
+
+### `upgrade(new_wasm_hash)` — admin only
+
+- Replaces the contract WASM in-place. Admin only.
+- Storage layout must remain compatible across versions; see
+  [contract-upgrade-pattern.md](contract-upgrade-pattern.md).
+
 
 ## Reset Semantics
 
@@ -82,6 +103,7 @@ The auto-reset advances `reset_ledger` by exactly `day_ledgers` from the current
 | `LimitExceeded` | 5 | Spend would exceed the daily limit |
 | `InvalidAmount` | 6 | `limit` or `amount` is ≤ 0 |
 | `InvalidPeriod` | 7 | `day_ledgers` is 0 |
+| `TooManyWallets` | 8 | Wallet cap (`MAX_WALLETS = 256`) reached; no new wallet limits can be added |
 
 ## Events
 
@@ -89,13 +111,34 @@ All state-mutating operations emit a structured event with topics `[mux_pol, act
 
 | Action | Emitted by | Data |
 |---|---|---|
-| `init` | `initialize` | admin address |
-| `lmt_set` | `set_daily_limit` | `(wallet, limit, day_ledgers)` |
-| `spent` | `record_spend` | `(wallet, amount)` |
+| `init` | `initialize` | `admin: Address` |
+| `lmt_set` | `set_daily_limit` | `(wallet: Address, limit: i128, day_ledgers: u32)` |
+| `spent` | `record_spend` | `(wallet: Address, amount: i128)` |
+| `ctr_rst` | `reset_daily_counter` | `wallet: Address` |
+
+> `get_daily_limit` and `upgrade` do not emit events. Failed calls (returning an error) never
+> emit events — only the success path publishes.
 
 ## Storage TTL
 
 Instance storage TTL is extended on every write (`TTL_THRESHOLD = 17 280`, `TTL_EXTEND_TO = 518 400` ledgers ≈ 30 days). Deployers should run a keeper job to extend TTL proactively; see [storage-griefing.md](storage-griefing.md).
+
+`WalletLimit` records use **persistent** storage keyed by `DataKey::WalletLimit(Address)`. Persistent entry TTL is also extended on every write to the record.
+
+## Storage Griefing Bounds
+
+The contract enforces a hard cap of **256 wallets** (`MAX_WALLETS = 256`) to prevent the admin from
+inflating storage unboundedly. The `WalletNames` vec in instance storage tracks registered wallet
+addresses and is checked before any new `WalletLimit` entry is created.
+
+| Collection | Key | Cap | Error on overflow |
+|---|---|---|---|
+| `WalletNames` vec | `DataKey::WalletNames` (instance) | 256 | `TooManyWallets` |
+| `WalletLimit` per wallet | `DataKey::WalletLimit(Address)` (persistent) | bounded by `WalletNames` cap | — |
+
+Updating an existing wallet's limit (re-calling `set_daily_limit` for a wallet already in
+`WalletNames`) never increments the count — the deduplication check runs before the push.
+See [storage-griefing.md](storage-griefing.md) for the full keeper runbook.
 
 ## Authorization Requirements
 
