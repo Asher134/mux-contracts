@@ -5,8 +5,9 @@
  *
  * # `no_std` Constraints
  *
- * This crate is `#![no_std]` and does not use `extern crate alloc`.
- * All data structures use Soroban SDK types backed by the Soroban host.
+ * This crate is `#![no_std]` and uses `extern crate alloc` so that test
+ * helpers can use `alloc::format!` for generating unique symbol names.
+ * All runtime data structures use Soroban SDK types backed by the host.
  *
  * ## Upgrade Migration Notes
  *
@@ -31,6 +32,8 @@
  */
 
 #![no_std]
+
+extern crate alloc;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
@@ -215,6 +218,17 @@ impl MuxWalletRegistry {
             .instance()
             .get(&DataKey::Metadata(name))
             .ok_or(WalletRegistryError::WalletNotFound)
+    }
+
+    /// List all registered wallet names.
+    ///
+    /// Returns an empty vec if `initialize` has not been called yet.
+    /// No authorisation is required.
+    pub fn list_wallets(env: Env) -> Vec<Symbol> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Names)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
