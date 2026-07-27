@@ -100,16 +100,21 @@ impl MuxDelegation {
         }
 
         // Persist the permissions map (issue #83).
+        let perms_key = DataKey::DelegatePerms(owner.clone(), delegate.clone());
         env.storage().persistent().set(
-            &DataKey::DelegatePerms(owner.clone(), delegate.clone()),
+            &perms_key,
             &permissions,
         );
+        // Extend per-entry TTL so this DelegatePerms record stays live
+        // independently of the contract instance TTL (closes #407).
+        Self::extend_entry_ttl(&env, &perms_key);
 
         // Track delegate in owner's delegate list.
+        let delegates_key = DataKey::OwnerDelegates(owner.clone());
         let mut delegates: Vec<Address> = env
             .storage()
             .persistent()
-            .get(&DataKey::OwnerDelegates(owner.clone()))
+            .get(&delegates_key)
             .unwrap_or_else(|| Vec::new(&env));
         if !delegates.contains(&delegate) {
             if delegates.len() >= MAX_DELEGATES_PER_OWNER {
@@ -118,7 +123,12 @@ impl MuxDelegation {
             delegates.push_back(delegate.clone());
             env.storage()
                 .persistent()
-                .set(&DataKey::OwnerDelegates(owner.clone()), &delegates);
+                .set(&delegates_key, &delegates);
+            // Extend per-entry TTL for the owner delegate list as well.
+            Self::extend_entry_ttl(&env, &delegates_key);
+        } else {
+            // Refresh TTL even when the delegate is already tracked (re-grant).
+            Self::extend_entry_ttl(&env, &delegates_key);
         }
 
         Self::extend_ttl(&env);
@@ -148,17 +158,20 @@ impl MuxDelegation {
         env.storage().persistent().remove(&key);
 
         // Remove delegate from owner's delegate list.
+        let delegates_key = DataKey::OwnerDelegates(owner.clone());
         if let Some(mut delegates) = env
             .storage()
             .persistent()
-            .get::<DataKey, Vec<Address>>(&DataKey::OwnerDelegates(owner.clone()))
+            .get::<DataKey, Vec<Address>>(&delegates_key)
         {
             if let Some(i) = delegates.iter().position(|a| a == delegate) {
                 delegates.remove(i as u32);
             }
             env.storage()
                 .persistent()
-                .set(&DataKey::OwnerDelegates(owner.clone()), &delegates);
+                .set(&delegates_key, &delegates);
+            // Refresh per-entry TTL after mutation (closes #407).
+            Self::extend_entry_ttl(&env, &delegates_key);
         }
 
         Self::extend_ttl(&env);
@@ -198,6 +211,19 @@ impl MuxDelegation {
         env.storage()
             .instance()
             .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+
+    /// Extend the TTL for a single persistent `DelegatePerms` or `OwnerDelegates`
+    /// entry. Called after every write so individual entries do not expire while
+    /// the contract instance is still live.
+    ///
+    /// This is the per-entry counterpart to `extend_ttl`, which only refreshes
+    /// the contract *instance* storage. Persistent entries have their own TTL
+    /// clock and must be bumped independently (see docs/storage-griefing.md).
+    fn extend_entry_ttl(env: &Env, key: &DataKey) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
     }
 }
 
