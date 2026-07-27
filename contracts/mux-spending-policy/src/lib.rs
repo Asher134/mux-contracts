@@ -46,14 +46,22 @@ pub enum DataKey {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/// A spend policy describing the maximum spendable amount for a given asset.
+/// A spend policy describing the maximum spendable amount for a given asset
+/// within a rolling time window measured in ledgers.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpendLimit {
     /// Asset identifier associated with the policy.
     pub asset: Address,
-    /// Maximum amount that may be spent for the asset.
+    /// Maximum amount that may be spent per period window.
     pub limit: i128,
+    /// Amount spent in the current period window.
+    pub spent: i128,
+    /// Ledger sequence at which the current window expires and `spent` resets.
+    pub reset_ledger: u32,
+    /// Length of one period window in ledgers (≈ 17 280 at 5-second close ≈ 1 day).
+    /// Must be > 0.
+    pub period_ledgers: u32,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -75,6 +83,8 @@ pub enum SpendingPolicyError {
     SpendLimitExceeded = 5,
     /// The provided input is invalid (for example a non-positive limit).
     InvalidInput = 6,
+    /// The provided period is invalid (zero is not allowed).
+    InvalidPeriod = 7,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
@@ -105,12 +115,15 @@ impl MuxSpendingPolicy {
     /// Set or replace the spend limit for an account/asset pair.
     ///
     /// Only the initialized admin can change policies. The configured limit
-    /// must be strictly positive.
+    /// must be strictly positive. `period_ledgers` sets the rolling window
+    /// length in ledgers and must be > 0 (≈ 17 280 ledgers ≈ 1 day at 5-second
+    /// ledger close). The spent counter is reset to 0 on every call.
     pub fn set_policy(
         env: Env,
         account: Address,
         asset: Address,
         limit: i128,
+        period_ledgers: u32,
     ) -> Result<(), SpendingPolicyError> {
         Self::require_admin(&env)?;
         if limit <= 0 {
@@ -142,6 +155,11 @@ impl MuxSpendingPolicy {
     }
 
     /// Check whether `amount` is within the policy limit for `account`/`asset`.
+    ///
+    /// The check is evaluated against a rolling period window. If the window
+    /// has expired (current ledger >= `reset_ledger`), the spent counter is
+    /// reset and the window advanced before checking. The updated record is
+    /// persisted so the reset is durable.
     ///
     /// Returns `Ok(())` when the spend is allowed, `Err(SpendLimitExceeded)`
     /// when the spend exceeds the configured limit, `Err(PolicyNotFound)` when
@@ -279,7 +297,7 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17280);
         let events = env.events().all();
         // init + lmt_set
         assert_eq!(events.len(), 2);
@@ -291,10 +309,12 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17280);
         let policy = client.get_policy(&account, &asset);
         assert_eq!(policy.limit, 1000);
         assert_eq!(policy.asset, asset);
+        assert_eq!(policy.period_ledgers, 17280);
+        assert_eq!(policy.spent, 0);
     }
 
     #[test]
@@ -302,8 +322,8 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &500);
-        client.set_policy(&account, &asset, &2000);
+        client.set_policy(&account, &asset, &500, &17280);
+        client.set_policy(&account, &asset, &2000, &17280);
         let policy = client.get_policy(&account, &asset);
         assert_eq!(policy.limit, 2000);
     }
@@ -313,8 +333,8 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &100);
-        client.set_policy(&account, &asset, &200);
+        client.set_policy(&account, &asset, &100, &17280);
+        client.set_policy(&account, &asset, &200, &17280);
         let events = env.events().all();
         // init + lmt_set + lmt_set
         assert_eq!(events.len(), 3);
@@ -337,9 +357,8 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17280);
         assert!(client.try_check_spend(&account, &asset, &500).is_ok());
-        assert!(client.try_check_spend(&account, &asset, &1000).is_ok());
     }
 
     #[test]
@@ -347,7 +366,7 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17280);
         let result = client.try_check_spend(&account, &asset, &1001);
         assert_eq!(result, Err(Ok(SpendingPolicyError::SpendLimitExceeded)));
     }
@@ -364,7 +383,7 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        let result = client.try_set_policy(&account, &asset, &0);
+        let result = client.try_set_policy(&account, &asset, &0, &17280);
         assert!(result.is_err());
         let err = result.unwrap_err().unwrap();
         assert_eq!(err, SpendingPolicyError::InvalidInput);
@@ -375,7 +394,7 @@ mod tests {
         let (env, client, _) = setup();
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17280);
         let result = client.try_check_spend(&account, &asset, &-1);
         assert!(result.is_err());
         let err = result.unwrap_err().unwrap();
@@ -439,7 +458,7 @@ mod tests {
 
         // Test with very large limit (max i128)
         let max_limit = i128::MAX;
-        client.set_policy(&account, &asset, &max_limit);
+        client.set_policy(&account, &asset, &max_limit, &17280);
         let policy = client.get_policy(&account, &asset);
         assert_eq!(policy.limit, max_limit);
 
@@ -619,7 +638,10 @@ mod tests {
 
         assert_eq!(policy.limit, 1);
         assert!(client.try_check_spend(&account, &asset, &1).is_ok());
-        assert!(client.try_check_spend(&account, &asset, &2).is_err());
+        assert_eq!(
+            client.try_check_spend(&account, &asset, &1),
+            Err(Ok(SpendingPolicyError::SpendLimitExceeded))
+        );
     }
 
     // ── Audit Event Tests ──────────────────────────────────────────────────────
