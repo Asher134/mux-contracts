@@ -36,8 +36,15 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
+    Symbol, Vec,
 };
+
+// ── Audit events ──────────────────────────────────────────────────────────────
+fn emit(env: &Env, action: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events()
+        .publish((symbol_short!("mux_wreg"), action), data);
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -123,6 +130,7 @@ impl MuxWalletRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        emit(&env, symbol_short!("init"), owner);
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -158,7 +166,8 @@ impl MuxWalletRegistry {
 
         env.storage()
             .instance()
-            .set(&DataKey::Wallet(name), &wallet);
+            .set(&DataKey::Wallet(name.clone()), &wallet);
+        emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -207,7 +216,9 @@ impl MuxWalletRegistry {
         let meta = WalletMetadata { label, description };
         env.storage()
             .instance()
-            .set(&DataKey::Metadata(name), &meta);
+            .set(&DataKey::Metadata(name.clone()), &meta);
+        emit(&env, symbol_short!("wlt_reg"), (name.clone(), wallet));
+        emit(&env, symbol_short!("wlt_meta"), name);
         Self::extend_ttl(&env);
         Ok(())
     }
