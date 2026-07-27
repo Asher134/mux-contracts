@@ -724,4 +724,112 @@ mod tests {
         let result = client.try_check_delegate(&owner, &delegate, &perm);
         assert_eq!(result, Err(Ok(MuxDelegationError::NotADelegate)));
     }
-}
+
+    // ── Unauthorized delegate denial tests (closes #408) ─────────────────────
+    //
+    // These tests verify that `grant_delegate` and `revoke_delegate` reject
+    // callers who have not been authorised as the declared `owner`.  Following
+    // the pattern used across mux-* contracts (see mux-account-factory), they
+    // deliberately omit `mock_all_auths` so that `require_auth` rejects the
+    // call at the host level, surfacing as `Err(..)` from `try_*`.
+
+    /// Calling grant_delegate without any authorised signer must be rejected.
+    #[test]
+    fn test_grant_delegate_requires_owner_auth() {
+        // No mock_all_auths — require_auth must reject.
+        let env = Env::default();
+        let id = env.register_contract(None, MuxDelegation);
+        let client = MuxDelegationClient::new(&env, &id);
+
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perms = vec![&env, symbol_short!("read")];
+
+        let result = client.try_grant_delegate(&owner, &delegate, &perms);
+        assert!(
+            result.is_err(),
+            "grant_delegate must reject when owner auth is absent"
+        );
+
+        // No storage must have been written.
+        assert!(
+            client.get_delegates(&owner).is_empty(),
+            "no delegate must be registered after a rejected grant"
+        );
+        assert!(
+            !client.is_delegate(&owner, &delegate, &symbol_short!("read")),
+            "is_delegate must return false after a rejected grant"
+        );
+    }
+
+    /// Calling revoke_delegate without authorisation must be rejected.
+    /// require_auth is checked before any storage read, so the call fails
+    /// on auth even when no grant exists yet.
+    #[test]
+    fn test_revoke_delegate_requires_owner_auth() {
+        // No mock_all_auths — require_auth must reject before any storage access.
+        let env = Env::default();
+        let id = env.register_contract(None, MuxDelegation);
+        let client = MuxDelegationClient::new(&env, &id);
+
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+
+        let result = client.try_revoke_delegate(&owner, &delegate);
+        assert!(
+            result.is_err(),
+            "revoke_delegate must reject when owner auth is absent"
+        );
+    }
+
+    /// is_delegate must return false for a (owner, delegate) pair that was
+    /// never granted — no auth required for this read-only query.
+    #[test]
+    fn test_is_delegate_returns_false_for_never_granted() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let stranger = Address::generate(&env);
+
+        // No grant has ever been made between owner and stranger.
+        assert!(
+            !client.is_delegate(&owner, &stranger, &symbol_short!("read")),
+            "is_delegate must return false for a never-granted pair"
+        );
+        assert!(
+            !client.is_delegate(&owner, &stranger, &symbol_short!("transfer")),
+            "is_delegate must return false regardless of the queried permission"
+        );
+    }
+
+    /// is_delegate returns false after a grant is revoked (post-revoke denial).
+    #[test]
+    fn test_is_delegate_false_after_revoke() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perm = symbol_short!("trade");
+
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm.clone()]);
+        assert!(client.is_delegate(&owner, &delegate, &perm));
+
+        client.revoke_delegate(&owner, &delegate);
+        assert!(
+            !client.is_delegate(&owner, &delegate, &perm),
+            "is_delegate must return false after the grant is revoked"
+        );
+    }
+
+    /// get_delegate_permissions returns an empty vec for a never-granted pair.
+    #[test]
+    fn test_get_delegate_permissions_empty_for_never_granted() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let stranger = Address::generate(&env);
+
+        let perms = client.get_delegate_permissions(&owner, &stranger);
+        assert_eq!(
+            perms.len(),
+            0,
+            "get_delegate_permissions must return empty vec for unknown pair"
+        );
+    }
