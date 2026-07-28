@@ -1,44 +1,84 @@
 /*!
- * mux-delegation: Delegate permission management for Mux Protocol.
+ * mux-delegation: Scoped delegate permission management for Mux Protocol.
  *
- * Allows an owner to grant or revoke scoped permissions to a delegate
- * address. Delegates act on behalf of owners only within the granted
- * permission set.
+ * An *owner* (any Soroban [`Address`]) can grant a named set of *permissions*
+ * to a *delegate* address. Delegates act on behalf of the owner **only within
+ * the granted permission set** — they cannot self-escalate or sub-grant.
  *
- * Each owner may register up to 128 delegates. Each delegate may hold up to
- * 64 permissions. All state-mutating operations require owner authorization
- * and emit an audit event under the `mux_dlg` contract tag.
+ * Each owner may register up to [`MAX_DELEGATES_PER_OWNER`] (128) delegates.
+ * Each delegate may hold up to [`MAX_DELEGATE_PERMS`] (64) permissions. All
+ * state-mutating operations require owner authorization and emit an audit
+ * event under the `mux_dlg` contract tag.
+ *
+ * # Permission Model
+ *
+ * Permissions are opaque [`Symbol`] values chosen by the application layer
+ * (e.g. `"transfer"`, `"read"`, `"swap"`). Calling `grant_delegate` with a
+ * new permission list **replaces** any prior grant for the same
+ * `(owner, delegate)` pair — there is no append mode.
+ *
+ * See [`docs/delegation-permission-model.md`] for the full security model,
+ * storage layout, bounds rationale, and TypeScript binding notes.
  *
  * # Public Interface
  *
- * | Entrypoint                  | Description                                                   |
- * |-----------------------------|---------------------------------------------------------------|
- * | `grant_delegate`            | Grant a set of permissions from owner to delegate (owner auth required). |
- * | `revoke_delegate`           | Revoke all permissions for an (owner, delegate) pair (owner auth required). |
- * | `get_delegate_permissions`  | Return the `Vec<Symbol>` of permissions granted to a delegate. |
- * | `is_delegate`               | Return `true` if owner has granted a specific permission to delegate. |
- * | `get_delegates`             | Return all delegate addresses registered under an owner.     |
- * | `check_delegate`            | Read-only convenience check: `Ok(())` if permission is granted, `Err(NotADelegate)` otherwise. |
+ * | Entrypoint                  | Auth   | Description                                                        |
+ * |-----------------------------|--------|--------------------------------------------------------------------|
+ * | `grant_delegate`            | Owner  | Grant a permission set to a delegate (replaces prior grant).       |
+ * | `revoke_delegate`           | Owner  | Revoke all permissions for an `(owner, delegate)` pair.            |
+ * | `get_delegate_permissions`  | None   | Return the `Vec<Symbol>` of permissions granted to a delegate.     |
+ * | `is_delegate`               | None   | Return `true` if owner has granted a specific permission to delegate. |
+ * | `get_delegates`             | None   | Return all delegate addresses registered under an owner.           |
+ * | `check_delegate`            | None   | `Ok(())` if permission granted, `Err(NotADelegate)` otherwise.     |
+ *
+ * # Audit Events
+ *
+ * Contract tag: `mux_dlg`
+ *
+ * | Action      | Trigger           | Data payload                       |
+ * |-------------|-------------------|------------------------------------|
+ * | `dlg_grant` | `grant_delegate`  | `(owner: Address, delegate: Address)` |
+ * | `dlg_rev`   | `revoke_delegate` | `(owner: Address, delegate: Address)` |
+ *
+ * Events are emitted only on success. See [`docs/audit-events.md`] for the
+ * full event schema and RPC filter examples.
  *
  * # Storage Layout
  *
- * | Key                              | Value          | TTL        |
- * |----------------------------------|----------------|------------|
- * | `DelegatePerms(owner, delegate)` | `Vec<Symbol>`  | Persistent |
- * | `OwnerDelegates(owner)`          | `Vec<Address>` | Persistent |
+ * | Key                              | Value          | TTL                         |
+ * |----------------------------------|----------------|-----------------------------|
+ * | `DelegatePerms(owner, delegate)` | `Vec<Symbol>`  | Persistent (per-entry bump) |
+ * | `OwnerDelegates(owner)`          | `Vec<Address>` | Persistent (per-entry bump) |
+ *
+ * Per-entry TTLs are refreshed independently of the contract instance TTL
+ * on every write (`extend_entry_ttl`). Threshold: 17,280 ledgers (~1 day);
+ * extend-to: 518,400 ledgers (~30 days).
  *
  * # Bounds
  *
- * - `MAX_DELEGATE_PERMS` = 64 — maximum permissions per (owner, delegate) pair.
- * - `MAX_DELEGATES_PER_OWNER` = 128 — maximum delegate addresses per owner (storage-griefing guard).
+ * - [`MAX_DELEGATE_PERMS`] = 64 — maximum permissions per `(owner, delegate)` pair.
+ * - [`MAX_DELEGATES_PER_OWNER`] = 128 — maximum delegate addresses per owner
+ *   (storage-griefing guard).
  *
  * # `no_std` Constraints
  *
  * This crate is `#![no_std]` and does not use `extern crate alloc`.
  * All data structures use Soroban SDK types backed by the Soroban host.
  *
+ * # Error Codes (Stable ABI)
+ *
  * Error codes 6001–6004 are stable ABI — coordinate changes with a registry
  * version bump.
+ *
+ * | Code | Variant              | Description                                         |
+ * |------|----------------------|-----------------------------------------------------|
+ * | 6001 | `NotADelegate`       | No grant exists for the `(owner, delegate)` pair    |
+ * | 6002 | `TooManyPermissions` | `permissions` list exceeds the 64-entry cap         |
+ * | 6003 | `EmptyPermissions`   | `permissions` is empty; at least one required       |
+ * | 6004 | `TooManyDelegates`   | Owner already has 128 delegates registered          |
+ *
+ * [`docs/delegation-permission-model.md`]: ../../docs/delegation-permission-model.md
+ * [`docs/audit-events.md`]: ../../docs/audit-events.md
  */
 
 #![no_std]

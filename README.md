@@ -370,6 +370,7 @@ See the [Deploying Contracts](#deploying-contracts) section above for the full d
 - [Contract Upgrade Pattern](docs/contract-upgrade-pattern.md) — canonical upgrade procedure for all Mux Soroban contracts
 
 - [Architecture Overview](docs/architecture-overview.md) — High-level diagram and system components
+- [Delegation Permission Model](docs/delegation-permission-model.md) — Permission grant/revoke semantics, storage bounds, error codes, and TypeScript binding notes
 - [Policy Semantics](docs/policy-semantics.md) — Per-wallet daily spend limit design, reset logic, and error codes
 - [Account Abstraction Design](docs/account-abstraction.md) — Goals, architecture, session key design, and transaction flows
 - [Backend Orchestrator Integration](docs/aa-backend-orchestrator.md) — Scope and architecture for relayer integration
