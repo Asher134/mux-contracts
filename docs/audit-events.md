@@ -53,7 +53,54 @@ Contract tag: `mux_fac`
 | `deployed` | `deploy_account` or `deploy_account_with_metadata` succeeds | `(owner: Address, account_address: Address)` |
 | `meta_set` | `deploy_account_with_metadata` succeeds | `(owner: Address, account_address: Address, version: String)` |
 
-> `get_accounts`, `account_count`, and `get_account_metadata` are read-only and emit no events.
+Event ordering within a single `deploy_account_with_metadata` call:
+1. `deployed` — always emitted first
+2. `meta_set` — always emitted second, in the same transaction
+
+**No-event paths** — the following entrypoints are read-only or validation-only
+and **must never emit events**:
+
+| Entrypoint | Reason |
+|---|---|
+| `get_accounts` | Pure read — no state mutation |
+| `account_count` | Pure read — no state mutation |
+| `get_account_metadata` | Pure read — no state mutation |
+| `simulate_deploy` | Dry-run validation; no storage written |
+| `simulate_deploy_with_metadata` | Dry-run validation; no storage written |
+| `max_accounts_per_owner` | Returns a constant; no storage touched |
+
+Auth failures (`owner.require_auth()` rejected) and all `Result::Err` return
+paths (`InvalidAccount`, `TooManyAccounts`, `MetadataTooLarge`) also emit zero
+events — the emit call is only reached after every validation step passes.
+
+**TypeScript — filtering factory events:**
+
+```ts
+import {
+  FACTORY_CONTRACT_TAG,
+  FACTORY_EVENT_TOPICS,
+  parseFactoryEvent,
+  type FactoryEvent,
+} from "@mux-protocol/contracts";
+
+const rawEvents = await server.getEvents({
+  startLedger,
+  filters: [{
+    type: "contract",
+    contractIds: [FACTORY_CONTRACT_ID],
+    topics: [[FACTORY_CONTRACT_TAG]],          // filter by contract tag only
+  }],
+});
+
+const events: FactoryEvent[] = rawEvents.records
+  .map(parseFactoryEvent)
+  .filter((e): e is FactoryEvent => e !== null);
+
+// Narrow to just deploys:
+const deploys = events.filter(e => e.action === "deployed");
+// Narrow to just metadata updates:
+const metaUpdates = events.filter(e => e.action === "meta_set");
+```
 
 ---
 
