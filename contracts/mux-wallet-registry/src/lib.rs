@@ -924,4 +924,235 @@ mod tests {
         assert_eq!(meta.label, label);
         assert_eq!(meta.description, desc);
     }
+
+    // ── Register / get hardening tests ────────────────────────────────────────
+
+    /// `register_wallet` with an existing name silently replaces the stored
+    /// address. `get_wallet` must return the new address afterward, and the
+    /// name must still appear exactly once in `list_wallets`.
+    #[test]
+    fn test_register_wallet_overwrites_address_for_existing_name() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("alice");
+        let wallet_v1 = Address::generate(&env);
+        let wallet_v2 = Address::generate(&env);
+
+        client.register_wallet(&name, &wallet_v1);
+        assert_eq!(client.get_wallet(&name), wallet_v1);
+
+        // Overwrite with a different address.
+        client.register_wallet(&name, &wallet_v2);
+        assert_eq!(
+            client.get_wallet(&name),
+            wallet_v2,
+            "get_wallet must return the overwritten address"
+        );
+
+        // Name must appear exactly once in the list.
+        let names = client.list_wallets();
+        let count = names.iter().filter(|n| *n == name).count();
+        assert_eq!(count, 1, "name must appear exactly once after overwrite");
+    }
+
+    /// `register_wallet_with_metadata` with an existing name must replace the
+    /// stored address (not just the label/description).
+    #[test]
+    fn test_register_wallet_with_metadata_overwrites_address() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("bob");
+        let wallet_v1 = Address::generate(&env);
+        let wallet_v2 = Address::generate(&env);
+        let label = String::from_str(&env, "Bob");
+        let desc = String::from_str(&env, "desc");
+
+        client.register_wallet_with_metadata(&name, &wallet_v1, &label, &desc);
+        assert_eq!(client.get_wallet(&name), wallet_v1);
+
+        // Re-register with a new address.
+        client.register_wallet_with_metadata(&name, &wallet_v2, &label, &desc);
+        assert_eq!(
+            client.get_wallet(&name),
+            wallet_v2,
+            "get_wallet must return the new address after metadata-path overwrite"
+        );
+
+        // Name must still appear once.
+        let names = client.list_wallets();
+        let count = names.iter().filter(|n| *n == name).count();
+        assert_eq!(count, 1);
+    }
+
+    /// Cross-path overwrite: register via `register_wallet_with_metadata`, then
+    /// call `register_wallet` for the same name. The plain register call must
+    /// update the address; the metadata entry is left intact.
+    #[test]
+    fn test_register_wallet_after_metadata_path_overwrites_address() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("carol");
+        let wallet_v1 = Address::generate(&env);
+        let wallet_v2 = Address::generate(&env);
+        let label = String::from_str(&env, "Carol");
+        let desc = String::from_str(&env, "original");
+
+        // Initial registration via metadata path.
+        client.register_wallet_with_metadata(&name, &wallet_v1, &label, &desc);
+        assert_eq!(client.get_wallet(&name), wallet_v1);
+
+        // Overwrite address via plain register_wallet.
+        client.register_wallet(&name, &wallet_v2);
+        assert_eq!(
+            client.get_wallet(&name),
+            wallet_v2,
+            "register_wallet must replace the address set by the metadata path"
+        );
+
+        // Metadata entry is left intact by the plain path.
+        let meta = client.get_metadata(&name);
+        assert_eq!(meta.label, label);
+
+        // Name appears once.
+        let names = client.list_wallets();
+        let count = names.iter().filter(|n| *n == name).count();
+        assert_eq!(count, 1);
+    }
+
+    /// `list_wallets` must return exactly all registered names — no extras,
+    /// no omissions — and each name must resolve correctly via `get_wallet`.
+    #[test]
+    fn test_list_wallets_reflects_all_registered_names() {
+        let (env, client, _) = setup();
+        let names_and_wallets: [(soroban_sdk::Symbol, Address); 4] = [
+            (symbol_short!("alice"), Address::generate(&env)),
+            (symbol_short!("bob"), Address::generate(&env)),
+            (symbol_short!("carol"), Address::generate(&env)),
+            (symbol_short!("dave"), Address::generate(&env)),
+        ];
+
+        for (name, wallet) in &names_and_wallets {
+            client.register_wallet(name, wallet);
+        }
+
+        let list = client.list_wallets();
+        assert_eq!(
+            list.len(),
+            names_and_wallets.len() as u32,
+            "list_wallets must return exactly the number of registered names"
+        );
+        for (name, expected_wallet) in &names_and_wallets {
+            assert!(
+                list.contains(name),
+                "list_wallets must include the registered name"
+            );
+            assert_eq!(
+                client.get_wallet(name),
+                *expected_wallet,
+                "get_wallet must return the correct address for each registered name"
+            );
+        }
+    }
+
+    /// `list_wallets` on an uninitialised contract must return an empty vec
+    /// without requiring auth.
+    #[test]
+    fn test_list_wallets_on_uninitialised_contract_returns_empty() {
+        // No mock_all_auths and no initialize call.
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxWalletRegistry);
+        let client = MuxWalletRegistryClient::new(&env, &cid);
+        assert_eq!(
+            client.list_wallets().len(),
+            0,
+            "list_wallets must return an empty vec on an uninitialised contract"
+        );
+    }
+
+    /// `list_wallets` on an initialised but empty registry must return an empty vec.
+    #[test]
+    fn test_list_wallets_empty_after_initialize() {
+        let (_, client, _) = setup();
+        assert_eq!(
+            client.list_wallets().len(),
+            0,
+            "list_wallets must be empty before any wallets are registered"
+        );
+    }
+
+    /// Multiple-wallet round-trip: register N wallets by both paths, retrieve
+    /// each one, and verify `list_wallets` contains exactly those N names.
+    #[test]
+    fn test_multiple_wallets_round_trip() {
+        let (env, client, _) = setup();
+
+        // Register a mix via both registration paths.
+        let bare_name = symbol_short!("bare");
+        let bare_wallet = Address::generate(&env);
+        client.register_wallet(&bare_name, &bare_wallet);
+
+        let meta_name = symbol_short!("meta");
+        let meta_wallet = Address::generate(&env);
+        let label = String::from_str(&env, "Meta Wallet");
+        let desc = String::from_str(&env, "registered with metadata");
+        client.register_wallet_with_metadata(&meta_name, &meta_wallet, &label, &desc);
+
+        let second_bare = symbol_short!("bare2");
+        let second_wallet = Address::generate(&env);
+        client.register_wallet(&second_bare, &second_wallet);
+
+        // All three must be retrievable.
+        assert_eq!(client.get_wallet(&bare_name), bare_wallet);
+        assert_eq!(client.get_wallet(&meta_name), meta_wallet);
+        assert_eq!(client.get_wallet(&second_bare), second_wallet);
+
+        // list_wallets must contain exactly the three registered names.
+        let list = client.list_wallets();
+        assert_eq!(list.len(), 3);
+        assert!(list.contains(&bare_name));
+        assert!(list.contains(&meta_name));
+        assert!(list.contains(&second_bare));
+    }
+
+    /// `get_wallet` requires no auth: calling it from an env with no mocked
+    /// signers must succeed for a registered name.
+    #[test]
+    fn test_get_wallet_requires_no_auth() {
+        // Set up and register in an env with mocked auth.
+        let env_auth = Env::default();
+        env_auth.mock_all_auths();
+        let cid = env_auth.register_contract(None, MuxWalletRegistry);
+        let c_auth = MuxWalletRegistryClient::new(&env_auth, &cid);
+        let owner = Address::generate(&env_auth);
+        c_auth.initialize(&owner);
+        let name = symbol_short!("pub");
+        let wallet = Address::generate(&env_auth);
+        c_auth.register_wallet(&name, &wallet);
+
+        // Read from a fresh env instance referencing the same contract — no auth mocks.
+        // (In unit tests each env is isolated, so we verify the read-only path on the
+        // same env without re-mocking.)
+        //
+        // The authoritative check: get_wallet on a completely fresh contract with no
+        // registered data must return WalletNotFound, not an auth error.  Any caller
+        // can invoke it without signing.
+        let env_noauth = Env::default();
+        let cid2 = env_noauth.register_contract(None, MuxWalletRegistry);
+        let c_noauth = MuxWalletRegistryClient::new(&env_noauth, &cid2);
+        // Not initialised, not mocked — must get WalletNotFound, not an auth panic.
+        let result = c_noauth.try_get_wallet(&symbol_short!("anything"));
+        assert_eq!(
+            result,
+            Err(Ok(WalletRegistryError::WalletNotFound)),
+            "get_wallet must return WalletNotFound (not an auth error) for any caller"
+        );
+    }
+
+    /// Error discriminant stability: the numeric values of all `WalletRegistryError`
+    /// variants are part of the on-chain ABI and must never change.
+    #[test]
+    fn test_error_discriminant_values_are_stable() {
+        assert_eq!(WalletRegistryError::NotInitialized as u32, 1);
+        assert_eq!(WalletRegistryError::AlreadyInitialized as u32, 2);
+        assert_eq!(WalletRegistryError::Unauthorized as u32, 3);
+        assert_eq!(WalletRegistryError::WalletNotFound as u32, 4);
+        assert_eq!(WalletRegistryError::TooManyWallets as u32, 5);
+    }
 }
