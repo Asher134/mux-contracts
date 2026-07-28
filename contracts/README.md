@@ -75,6 +75,7 @@ bash scripts/generate-bindings.sh
 
 ## Documentation
 
+- [`mux-account` public interface](../docs/mux-account-interface.md)
 - Consistent error handling with custom error types
 - Soroban SDK best practices
 - Storage optimization with TTL management
