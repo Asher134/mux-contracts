@@ -30,8 +30,9 @@
  *
  * # Events
  *
- * - `"init"` — Emitted on initialization
- * - `"reg"` — Emitted on registration with (name, version)
+ * - `"init"` — Emitted on initialization with `admin: Address`
+ * - `"reg"` — Emitted on `register` with `(name: Symbol, version: String)`
+ * - `"regmeta"` — Emitted on `register_with_metadata` with `(name: Symbol, version: String)`
  */
 
 #![no_std]
@@ -185,7 +186,7 @@ impl MuxRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Metadata(name.clone()), &meta);
-        emit(&env, symbol_short!("regmeta"), name);
+        emit(&env, symbol_short!("regmeta"), (name, version));
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -251,7 +252,7 @@ mod tests {
     use alloc::format;
     use soroban_sdk::{
         symbol_short,
-        testutils::Address as _,
+        testutils::{Address as _, Events},
         Env, String,
     };
 
@@ -456,6 +457,249 @@ mod tests {
         assert_eq!(result, Err(Ok(MuxRegistryError::TooManyContracts)));
     }
 
+    // ── Unauthorized admin tests ───────────────────────────────────────────────
+    //
+    // These tests verify that `register` and `register_with_metadata` reject
+    // callers who have not been authorised as the declared admin.  Following
+    // the pattern used across mux-* contracts (see mux-account-factory and
+    // mux-delegation), they deliberately omit `mock_all_auths` so that
+    // `require_auth` rejects the call at the host level, surfacing as
+    // `Err(..)` from `try_*`.  State mutation and event emission must not
+    // occur on a rejected call.
+
+    /// `register` without any authorised signer must be rejected at the host
+    /// level.  No version entry or name list entry may be written.
+    #[test]
+    fn test_register_requires_admin_auth() {
+        use soroban_sdk::testutils::Events;
+        // No mock_all_auths — require_auth must reject.
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        // Initialize with auth mocked just for this one call.
+        {
+            let env_init = Env::default();
+            env_init.mock_all_auths();
+            let cid = env_init.register_contract(None, MuxRegistry);
+            let c = MuxRegistryClient::new(&env_init, &cid);
+            let admin = Address::generate(&env_init);
+            c.initialize(&admin);
+        }
+
+        // Use a separate, properly initialised contract in its own env so
+        // require_auth fires on the register call (not on initialize).
+        let env2 = Env::default();
+        // Initialize with mocked auth.
+        let cid2 = env2.register_contract(None, MuxRegistry);
+        let c2 = MuxRegistryClient::new(&env2, &cid2);
+        let admin2 = Address::generate(&env2);
+        env2.mock_all_auths();
+        c2.initialize(&admin2);
+        env2.mock_all_auths_allowing_non_root_auth(); // clear mock; non-root denies register
+
+        // Use a clean env (no mocks) for the unauthorized register attempt.
+        let env3 = Env::default();
+        let cid3 = env3.register_contract(None, MuxRegistry);
+        let c3 = MuxRegistryClient::new(&env3, &cid3);
+        let admin3 = Address::generate(&env3);
+        // Initialise so Admin key is present (require_admin can find it).
+        {
+            let _guard = env3.mock_all_auths();
+            c3.initialize(&admin3);
+        }
+        // Now attempt register without mock — require_auth on admin3 must reject.
+        let name = symbol_short!("account");
+        let version = String::from_str(&env3, "1.0.0");
+        let result = c3.try_register(&name, &version);
+        assert!(
+            result.is_err(),
+            "register must be rejected when admin auth is absent"
+        );
+
+        // No version entry must have been written.
+        assert!(
+            c3.try_get_version(&name).is_err(),
+            "no version must be stored after a rejected register"
+        );
+        // Names list must still be empty.
+        assert_eq!(
+            c3.list_contracts().len(),
+            0,
+            "names list must remain empty after a rejected register"
+        );
+        // No events must have been emitted.
+        assert_eq!(
+            env3.events().all().len(),
+            0,
+            "no events must be emitted after a rejected register"
+        );
+    }
+
+    /// `register_with_metadata` without any authorised signer must be rejected.
+    /// No version, metadata, or name list entry may be written.
+    #[test]
+    fn test_register_with_metadata_requires_admin_auth() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        // Initialise so Admin key is present.
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+        // Attempt register_with_metadata without any auth mock.
+        let name = symbol_short!("batcher");
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Batcher contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository =
+            String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+
+        let result = client.try_register_with_metadata(
+            &name,
+            &version,
+            &description,
+            &author,
+            &repository,
+        );
+        assert!(
+            result.is_err(),
+            "register_with_metadata must be rejected when admin auth is absent"
+        );
+
+        // No version entry must have been written.
+        assert!(
+            client.try_get_version(&name).is_err(),
+            "no version must be stored after a rejected register_with_metadata"
+        );
+        // No metadata entry must have been written.
+        assert!(
+            client.try_get_metadata(&name).is_err(),
+            "no metadata must be stored after a rejected register_with_metadata"
+        );
+        // Names list must still be empty.
+        assert_eq!(
+            client.list_contracts().len(),
+            0,
+            "names list must remain empty after a rejected register_with_metadata"
+        );
+        // No events must have been emitted (init event from {_guard} env is gone; this env only).
+        assert_eq!(
+            env.events().all().len(),
+            0,
+            "no events must be emitted after a rejected register_with_metadata"
+        );
+    }
+
+    /// A non-admin caller (different address from the stored admin) must not be
+    /// able to register contracts.  The admin key is present but `require_auth`
+    /// must reject the wrong signer.
+    #[test]
+    fn test_register_rejects_non_admin_caller() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        let _attacker = Address::generate(&env);
+
+        // Initialise legitimately.
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+
+        // Attempt to register from env with no mocked signer.
+        let name = symbol_short!("perm");
+        let version = String::from_str(&env, "3.0.0");
+        let result = client.try_register(&name, &version);
+        assert!(
+            result.is_err(),
+            "register must reject a non-admin caller"
+        );
+
+        assert!(client.try_get_version(&name).is_err());
+        assert_eq!(client.list_contracts().len(), 0);
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    /// A non-admin caller must not be able to register contracts with metadata.
+    #[test]
+    fn test_register_with_metadata_rejects_non_admin_caller() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let cid = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+
+        let name = symbol_short!("policy");
+        let version = String::from_str(&env, "2.0.0");
+        let description = String::from_str(&env, "Policy contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository =
+            String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+
+        let result = client.try_register_with_metadata(
+            &name,
+            &version,
+            &description,
+            &author,
+            &repository,
+        );
+        assert!(
+            result.is_err(),
+            "register_with_metadata must reject a non-admin caller"
+        );
+
+        assert!(client.try_get_version(&name).is_err());
+        assert!(client.try_get_metadata(&name).is_err());
+        assert_eq!(client.list_contracts().len(), 0);
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    /// An unauthorized `register` call must not affect a previously-authorized
+    /// registration in a separate env — isolation check.
+    #[test]
+    fn test_unauthorized_register_does_not_affect_other_envs() {
+        // Authorized env: register one contract legitimately.
+        let env_auth = Env::default();
+        env_auth.mock_all_auths();
+        let cid_auth = env_auth.register_contract(None, MuxRegistry);
+        let c_auth = MuxRegistryClient::new(&env_auth, &cid_auth);
+        let admin_auth = Address::generate(&env_auth);
+        c_auth.initialize(&admin_auth);
+        let name_auth = symbol_short!("account");
+        let version = String::from_str(&env_auth, "1.0.0");
+        c_auth.register(&name_auth, &version);
+        assert_eq!(c_auth.list_contracts().len(), 1);
+
+        // Unauthorized env: attempt without mock_all_auths.
+        let env_unauth = Env::default();
+        let cid_unauth = env_unauth.register_contract(None, MuxRegistry);
+        let c_unauth = MuxRegistryClient::new(&env_unauth, &cid_unauth);
+        let admin_unauth = Address::generate(&env_unauth);
+        {
+            let _guard = env_unauth.mock_all_auths();
+            c_unauth.initialize(&admin_unauth);
+        }
+        let name_unauth = symbol_short!("batcher");
+        let ver2 = String::from_str(&env_unauth, "1.0.0");
+        let result = c_unauth.try_register(&name_unauth, &ver2);
+        assert!(result.is_err());
+        assert_eq!(c_unauth.list_contracts().len(), 0);
+
+        // Original authorized env must be unaffected.
+        assert_eq!(c_auth.list_contracts().len(), 1);
+        assert!(c_auth.try_get_version(&name_auth).is_ok());
+    }
+
     // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
@@ -469,5 +713,146 @@ mod tests {
         for sym in tags.iter().chain(actions.iter()) {
             assert!(sym.to_val().len() <= 8);
         }
+    }
+
+    // ── Event assertions ──────────────────────────────────────────────────────
+
+    /// Extract the contract tag symbol (topics[0]) from a specific event index.
+    fn topic_tag(
+        env: &Env,
+        events: &soroban_sdk::Vec<(
+            soroban_sdk::Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
+        idx: u32,
+    ) -> soroban_sdk::Symbol {
+        let (_, topics, _) = events.get(idx).unwrap();
+        soroban_sdk::Symbol::from_val(env, &topics.get(0).unwrap())
+    }
+
+    /// Extract the action symbol (topics[1]) from a specific event index.
+    fn topic_action(
+        env: &Env,
+        events: &soroban_sdk::Vec<(
+            soroban_sdk::Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
+        idx: u32,
+    ) -> soroban_sdk::Symbol {
+        let (_, topics, _) = events.get(idx).unwrap();
+        soroban_sdk::Symbol::from_val(env, &topics.get(1).unwrap())
+    }
+
+    #[test]
+    fn test_initialize_emits_init_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly 1 event after initialize");
+        assert_eq!(topic_tag(&env, &events, 0), symbol_short!("mux_reg"));
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
+    }
+
+    #[test]
+    fn test_register_emits_reg_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("account");
+        let version = String::from_str(&env, "1.0.0");
+        client.register(&name, &version);
+
+        let events = env.events().all();
+        // events[0] = init from setup(), events[1] = reg
+        assert_eq!(events.len(), 2, "expected init + reg events");
+        assert_eq!(topic_tag(&env, &events, 1), symbol_short!("mux_reg"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("reg"));
+    }
+
+    #[test]
+    fn test_register_update_emits_reg_event() {
+        // Re-registering (version update) also emits reg.
+        let (env, client, _) = setup();
+        let name = symbol_short!("batcher");
+        let v1 = String::from_str(&env, "1.0.0");
+        let v2 = String::from_str(&env, "1.1.0");
+        client.register(&name, &v1);
+        client.register(&name, &v2);
+
+        let events = env.events().all();
+        // init + reg + reg
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("reg"));
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("reg"));
+        assert_eq!(client.get_version(&name), v2);
+    }
+
+    #[test]
+    fn test_register_with_metadata_emits_regmeta_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("account");
+        let version = String::from_str(&env, "2.0.0");
+        let description = String::from_str(&env, "Account abstraction contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+        client.register_with_metadata(&name, &version, &description, &author, &repository);
+
+        let events = env.events().all();
+        // events[0] = init, events[1] = regmeta
+        assert_eq!(events.len(), 2, "expected init + regmeta events");
+        assert_eq!(topic_tag(&env, &events, 1), symbol_short!("mux_reg"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("regmeta"));
+    }
+
+    #[test]
+    fn test_failed_initialize_emits_no_event() {
+        // Second initialize call is rejected — must not emit any event.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        let _ = client.try_initialize(&admin); // must fail
+
+        let events = env.events().all();
+        // Only the first (successful) initialize emitted an event.
+        assert_eq!(events.len(), 1);
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
+    }
+
+    #[test]
+    fn test_over_cap_register_emits_no_extra_event() {
+        // TooManyContracts rejection must not emit a reg event.
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let version = String::from_str(&env, "1.0.0");
+        for i in 0u32..128 {
+            let sym = soroban_sdk::Symbol::new(
+                &env,
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
+            );
+            client.register(&sym, &version);
+        }
+        let before = env.events().all().len();
+        let overflow = soroban_sdk::Symbol::new(&env, "ey");
+        let _ = client.try_register(&overflow, &version);
+        // No extra event from the failed call.
+        assert_eq!(env.events().all().len(), before);
     }
 }
