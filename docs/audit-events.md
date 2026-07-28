@@ -40,7 +40,7 @@ Contract tag: `mux_acct`
 | `dlg_rm` | `remove_delegate` succeeds | `delegate: Address` |
 | `lmt_set` | `set_spend_limit` succeeds | `(asset: Address, amount: i128, period_ledgers: u32)` |
 | `debited` | `debit_spend` succeeds | `(asset: Address, spend: i128)` |
-| `ses_exe` | `execute_with_session` succeeds | `(session_key: Address, payload: Bytes)` |
+| `ses_exe` | `execute_with_session` succeeds | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` |
 
 ---
 

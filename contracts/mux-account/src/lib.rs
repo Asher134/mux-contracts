@@ -121,6 +121,14 @@ pub struct SessionKeyRecord {
     pub revoked: bool,
 }
 
+/// Audit payload emitted after a successful session execution.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionExecutedEvent {
+    pub session_key: Address,
+    pub payload_len: u32,
+}
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 #[contracterror]
@@ -429,7 +437,14 @@ impl MuxAccount {
         // This requires the session registry contract to be implemented.
         // session_key.require_auth();
 
-        emit(&env, symbol_short!("ses_exe"), (session_key, payload));
+        emit(
+            &env,
+            symbol_short!("ses_exe"),
+            SessionExecutedEvent {
+                session_key,
+                payload_len: payload.len(),
+            },
+        );
         Self::extend_ttl(&env);
         Ok(Bytes::new(&env))
     }
