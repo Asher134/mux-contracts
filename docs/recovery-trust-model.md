@@ -77,6 +77,21 @@ The timelock is the primary defence against a compromised guardian set. Even if 
 
 **Assumption:** The owner monitors their account (or has an automated watcher) at least once every 24 hours.
 
+The `rec_init` event payload carries `initiated_at`, `executable_at`, and `expires_at` so that off-chain watchers can surface deadlines without a follow-up storage read.
+
+**TypeScript binding constants** (exported from `bindings/src/types.ts`):
+
+```ts
+import { RECOVERY_TIMELOCK_LEDGERS, RECOVERY_EXPIRY_LEDGERS } from "@mux-protocol/contracts";
+
+// Compute deadlines from the rec_init event without an RPC call:
+const executableAt = initiatedAt + RECOVERY_TIMELOCK_LEDGERS; // ~24 h
+const expiresAt    = initiatedAt + RECOVERY_EXPIRY_LEDGERS;   // ~7 days
+```
+
+These mirror the on-chain `RECOVERY_TIMELOCK` and `RECOVERY_EXPIRY` constants
+and are **stable ABI** — changing them is a breaking change for off-chain tooling.
+
 ### 4.2 Single active request
 
 Only one `Pending` request may exist at a time. A second `initiate_recovery` call while a request is `Pending` returns `RecoveryAlreadyPending`. This prevents guardians from flooding the contract with requests to confuse the owner.
