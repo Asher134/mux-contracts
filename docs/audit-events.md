@@ -130,6 +130,46 @@ Contract tag: `mux_dlg`
 | `dlg_grant` | `grant_delegate` succeeds | `(owner: Address, delegate: Address)` |
 | `dlg_rev` | `revoke_delegate` succeeds | `(owner: Address, delegate: Address)` |
 
+Events are emitted only on success. Failed calls (auth failure, empty
+permissions, cap exceeded) emit no events.
+
+> **Note:** The event data carries only `(owner, delegate)`. The full
+> permission list granted/revoked is **not** included in the event — retrieve
+> it via `get_delegate_permissions` if needed.
+
+**TypeScript — subscribing and parsing delegation events:**
+
+```ts
+import {
+  DELEGATION_CONTRACT_TAG,
+  DELEGATION_GRANT_ACTION,
+  DELEGATION_REVOKE_ACTION,
+  parseDelegationEvent,
+  type DelegationEvent,
+} from "@mux-protocol/contracts";
+
+const rawEvents = await server.getEvents({
+  startLedger,
+  filters: [{
+    type: "contract",
+    contractIds: [DELEGATION_CONTRACT_ID],
+    topics: [[DELEGATION_CONTRACT_TAG]],   // all mux_dlg events
+  }],
+});
+
+const events: DelegationEvent[] = rawEvents.records
+  .map(parseDelegationEvent)
+  .filter((e): e is DelegationEvent => e !== null);
+
+// Narrow to grants only:
+const grants = events.filter(e => e.action === DELEGATION_GRANT_ACTION);
+// Narrow to revokes only:
+const revokes = events.filter(e => e.action === DELEGATION_REVOKE_ACTION);
+```
+
+See [`docs/delegation-permission-model.md`](delegation-permission-model.md)
+for the full permission model and security notes.
+
 ---
 
 ## mux-batcher events
