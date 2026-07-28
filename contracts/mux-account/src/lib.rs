@@ -30,7 +30,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map,
-    String, Vec,
+    String, Symbol, Val, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -311,7 +311,34 @@ impl MuxAccount {
         Self::require_not_paused(&env)?;
         let caller = env.current_contract_address();
         caller.require_auth();
+        Self::apply_spend(&env, &asset, spend)?;
+        emit(&env, symbol_short!("debited"), (asset, spend));
+        Self::extend_ttl(&env);
+        Ok(())
+    }
 
+    /// Execute a contract call and account for its asset spend atomically.
+    pub fn execute(
+        env: Env,
+        target: Address,
+        function: Symbol,
+        args: Vec<Val>,
+        asset: Address,
+        spend: i128,
+    ) -> Result<Val, MuxAccountError> {
+        Self::require_not_paused(&env)?;
+        Self::require_owner(&env)?;
+        Self::apply_spend(&env, &asset, spend)?;
+        let result = env.invoke_contract::<Val>(&target, &function, args);
+        emit(&env, symbol_short!("executed"), (target, asset, spend));
+        Self::extend_ttl(&env);
+        Ok(result)
+    }
+
+    fn apply_spend(env: &Env, asset: &Address, spend: i128) -> Result<(), MuxAccountError> {
+        if spend <= 0 {
+            return Err(MuxAccountError::InvalidAmount);
+        }
         // Reentrancy guard: reject if a debit_spend call is already in progress.
         // On error return Soroban rolls back storage, so the flag is self-cleaning.
         if env
@@ -350,8 +377,6 @@ impl MuxAccount {
         // Clear reentrancy guard so subsequent top-level calls succeed.
         env.storage().instance().remove(&DataKey::Executing);
 
-        emit(&env, symbol_short!("debited"), (asset, spend));
-        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -513,6 +538,16 @@ mod tests {
         testutils::{storage::Instance as _, Address as _, Events, Ledger as _},
         Env, FromVal, String, Vec,
     };
+
+    #[contract]
+    struct ExecuteTarget;
+
+    #[contractimpl]
+    impl ExecuteTarget {
+        pub fn ping() -> u32 {
+            7
+        }
+    }
 
     fn topic_action(
         env: &Env,
@@ -759,6 +794,53 @@ mod tests {
         // Debit exceeding limit fails
         let result = client.try_debit_spend(&asset, &600_i128);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_enforces_spend_limit_before_invocation() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &100_i128, &100_u32);
+        let target = env.register_contract(None, ExecuteTarget);
+        let args = Vec::new(&env);
+
+        let value = client.execute(
+            &target,
+            &symbol_short!("ping"),
+            &args,
+            &asset,
+            &40_i128,
+        );
+        assert_eq!(u32::from_val(&env, &value), 7);
+        assert_eq!(
+            client.try_execute(
+                &target,
+                &symbol_short!("ping"),
+                &args,
+                &asset,
+                &70_i128,
+            ),
+            Err(Ok(MuxAccountError::SpendLimitExceeded))
+        );
+    }
+
+    #[test]
+    fn test_execute_rejects_non_positive_spend() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &100_i128, &100_u32);
+        assert_eq!(
+            client.try_execute(
+                &Address::generate(&env),
+                &symbol_short!("ping"),
+                &Vec::new(&env),
+                &asset,
+                &0_i128,
+            ),
+            Err(Ok(MuxAccountError::InvalidAmount))
+        );
     }
 
     #[test]

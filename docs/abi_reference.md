@@ -210,6 +210,7 @@ pub struct SessionKeyRecord {
 | `remove_delegate` | `delegate: Address` | `Result<(), MuxAccountError>` | Remove a delegate; owner-only |
 | `set_spend_limit` | `asset: Address, amount: i128, period_ledgers: u32` | `Result<(), MuxAccountError>` | Set per-asset spend limit; owner-only |
 | `debit_spend` | `asset: Address, spend: i128` | `Result<(), MuxAccountError>` | Check and debit a spend against the limit; contract-only |
+| `execute` | `target: Address, function: Symbol, args: Vec<Val>, asset: Address, spend: i128` | `Result<Val, MuxAccountError>` | Owner-authorized contract call with atomic on-chain spend-limit enforcement |
 | `owner` | — | `Result<Address, MuxAccountError>` | Return current owner |
 | `delegates` | — | `Result<Map<Address, DelegateInfo>, MuxAccountError>` | Return all active (non-expired) delegates |
 | `get_delegate` | `delegate: Address` | `Result<DelegateInfo, MuxAccountError>` | Return delegate info if currently active |
