@@ -30,8 +30,9 @@
  *
  * # Events
  *
- * - `"init"` — Emitted on initialization
- * - `"reg"` — Emitted on registration with (name, version)
+ * - `"init"` — Emitted on initialization with `admin: Address`
+ * - `"reg"` — Emitted on `register` with `(name: Symbol, version: String)`
+ * - `"regmeta"` — Emitted on `register_with_metadata` with `(name: Symbol, version: String)`
  */
 
 #![no_std]
@@ -185,7 +186,7 @@ impl MuxRegistry {
         env.storage()
             .instance()
             .set(&DataKey::Metadata(name.clone()), &meta);
-        emit(&env, symbol_short!("regmeta"), name);
+        emit(&env, symbol_short!("regmeta"), (name, version));
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -251,7 +252,7 @@ mod tests {
     use alloc::format;
     use soroban_sdk::{
         symbol_short,
-        testutils::Address as _,
+        testutils::{Address as _, Events},
         Env, String,
     };
 
@@ -469,5 +470,146 @@ mod tests {
         for sym in tags.iter().chain(actions.iter()) {
             assert!(sym.to_val().len() <= 8);
         }
+    }
+
+    // ── Event assertions ──────────────────────────────────────────────────────
+
+    /// Extract the contract tag symbol (topics[0]) from a specific event index.
+    fn topic_tag(
+        env: &Env,
+        events: &soroban_sdk::Vec<(
+            soroban_sdk::Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
+        idx: u32,
+    ) -> soroban_sdk::Symbol {
+        let (_, topics, _) = events.get(idx).unwrap();
+        soroban_sdk::Symbol::from_val(env, &topics.get(0).unwrap())
+    }
+
+    /// Extract the action symbol (topics[1]) from a specific event index.
+    fn topic_action(
+        env: &Env,
+        events: &soroban_sdk::Vec<(
+            soroban_sdk::Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
+        idx: u32,
+    ) -> soroban_sdk::Symbol {
+        let (_, topics, _) = events.get(idx).unwrap();
+        soroban_sdk::Symbol::from_val(env, &topics.get(1).unwrap())
+    }
+
+    #[test]
+    fn test_initialize_emits_init_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "expected exactly 1 event after initialize");
+        assert_eq!(topic_tag(&env, &events, 0), symbol_short!("mux_reg"));
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
+    }
+
+    #[test]
+    fn test_register_emits_reg_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("account");
+        let version = String::from_str(&env, "1.0.0");
+        client.register(&name, &version);
+
+        let events = env.events().all();
+        // events[0] = init from setup(), events[1] = reg
+        assert_eq!(events.len(), 2, "expected init + reg events");
+        assert_eq!(topic_tag(&env, &events, 1), symbol_short!("mux_reg"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("reg"));
+    }
+
+    #[test]
+    fn test_register_update_emits_reg_event() {
+        // Re-registering (version update) also emits reg.
+        let (env, client, _) = setup();
+        let name = symbol_short!("batcher");
+        let v1 = String::from_str(&env, "1.0.0");
+        let v2 = String::from_str(&env, "1.1.0");
+        client.register(&name, &v1);
+        client.register(&name, &v2);
+
+        let events = env.events().all();
+        // init + reg + reg
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("reg"));
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("reg"));
+        assert_eq!(client.get_version(&name), v2);
+    }
+
+    #[test]
+    fn test_register_with_metadata_emits_regmeta_event() {
+        let (env, client, _) = setup();
+        let name = symbol_short!("account");
+        let version = String::from_str(&env, "2.0.0");
+        let description = String::from_str(&env, "Account abstraction contract");
+        let author = String::from_str(&env, "mux-labs");
+        let repository = String::from_str(&env, "https://github.com/mux-protocol/mux-contracts");
+        client.register_with_metadata(&name, &version, &description, &author, &repository);
+
+        let events = env.events().all();
+        // events[0] = init, events[1] = regmeta
+        assert_eq!(events.len(), 2, "expected init + regmeta events");
+        assert_eq!(topic_tag(&env, &events, 1), symbol_short!("mux_reg"));
+        assert_eq!(topic_action(&env, &events, 1), symbol_short!("regmeta"));
+    }
+
+    #[test]
+    fn test_failed_initialize_emits_no_event() {
+        // Second initialize call is rejected — must not emit any event.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        let _ = client.try_initialize(&admin); // must fail
+
+        let events = env.events().all();
+        // Only the first (successful) initialize emitted an event.
+        assert_eq!(events.len(), 1);
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
+    }
+
+    #[test]
+    fn test_over_cap_register_emits_no_extra_event() {
+        // TooManyContracts rejection must not emit a reg event.
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let contract_id = env.register_contract(None, MuxRegistry);
+        let client = MuxRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let version = String::from_str(&env, "1.0.0");
+        for i in 0u32..128 {
+            let sym = soroban_sdk::Symbol::new(
+                &env,
+                &format!(
+                    "{}{}",
+                    (b'a' + (i / 26) as u8) as char,
+                    (b'a' + (i % 26) as u8) as char
+                ),
+            );
+            client.register(&sym, &version);
+        }
+        let before = env.events().all().len();
+        let overflow = soroban_sdk::Symbol::new(&env, "ey");
+        let _ = client.try_register(&overflow, &version);
+        // No extra event from the failed call.
+        assert_eq!(env.events().all().len(), before);
     }
 }
