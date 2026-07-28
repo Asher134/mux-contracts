@@ -23,6 +23,7 @@ export * from "./errors";
 export * from "./addresses";
 export * from "./addresses-config";
 export * from "./local-invoke";
+export * from "./factory-events";
 export * as examples from "./examples/frontend-usage";
 export * as accountExamples from "./examples/account-invoke";
 export * as batcher from "./batcher";
