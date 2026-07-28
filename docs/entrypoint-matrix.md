@@ -41,13 +41,14 @@ by a specific actor; public entrypoints are callable by anyone.
 
 | Entrypoint | Auth | Notes |
 |---|---|---|
-| `deploy_account(owner, addr)` | U | Owner authorizes |
-| `deploy_account_with_metadata(owner, addr, ...)` | U | Owner authorizes; metadata size caps |
-| `simulate_deploy(owner, addr)` | P | Dry-run; no state mutation |
-| `simulate_deploy_with_metadata(owner, addr, ...)` | P | Dry-run; no state mutation |
+| `deploy_account(owner, addr)` | U | Owner authorizes; enforces `MAX_ACCOUNTS_PER_OWNER = 64` cap |
+| `deploy_account_with_metadata(owner, addr, ...)` | U | Owner authorizes; enforces cap and metadata string size limits |
+| `simulate_deploy(owner, addr)` | P | Dry-run; no state mutation; mirrors same cap check as `deploy_account` |
+| `simulate_deploy_with_metadata(owner, addr, ...)` | P | Dry-run; no state mutation; mirrors cap and metadata size checks |
 | `get_accounts(owner)` | P | Read-only |
-| `account_count()` | P | Read-only |
+| `account_count()` | P | Read-only; global counter across all owners |
 | `get_account_metadata(owner, addr)` | P | Read-only |
+| `max_accounts_per_owner()` | P | Returns `MAX_ACCOUNTS_PER_OWNER` constant (64); allows clients to preflight cap checks |
 
 ## mux-batcher
 

@@ -129,6 +129,11 @@ See [docs/storage-griefing.md](storage-griefing.md) for full details.
 
 - [ ] `mux-account`: `set_delegate` enforces `MAX_DELEGATES = 64`; new entries beyond cap return `TooManyDelegates` (unit test: `test_delegate_cap_enforced`).
 - [ ] `mux-account`: updating an existing delegate at cap succeeds (unit test: `test_delegate_cap_allows_update`).
+- [ ] `mux-account-factory`: `deploy_account` and `deploy_account_with_metadata` enforce `MAX_ACCOUNTS_PER_OWNER = 64` per owner; new deploys beyond cap return `TooManyAccounts` (unit tests: `test_accounts_cap_enforced`, `test_deploy_account_with_metadata_enforces_cap`).
+- [ ] `mux-account-factory`: `simulate_deploy` and `simulate_deploy_with_metadata` enforce the same 64-account cap without writing state (unit tests: `test_simulate_deploy_enforces_cap`, `test_simulate_deploy_with_metadata_enforces_cap`).
+- [ ] `mux-account-factory`: per-owner cap is independent — one owner filling their cap does not block other owners (unit test: `test_cap_is_per_owner_not_global`).
+- [ ] `mux-account-factory`: metadata string sizes are bounded (`MAX_VERSION_LENGTH = 32`, `MAX_DESCRIPTION_LENGTH = 256`, `MAX_AUTHOR_LENGTH = 64`); oversized strings return `MetadataTooLarge` (unit tests: `test_metadata_version_too_long`, `test_metadata_description_too_long`, `test_metadata_author_too_long`).
+- [ ] `mux-account-factory`: `max_accounts_per_owner()` public entrypoint returns 64; TypeScript clients must query this before deploy to avoid `TooManyAccounts` (unit test: `test_max_accounts_per_owner_returns_64`).
 - [ ] `mux-permissions`: `grant_role` enforces `MAX_ROLE_MEMBERS = 256` per role; returns `TooManyMembers` (unit test: `test_role_member_cap_enforced`).
 - [ ] `mux-permissions`: `grant_role` enforces `MAX_ROLES_PER_ACCOUNT = 32` per account; returns `TooManyRoles` (unit test: `test_roles_per_account_cap_enforced`).
 - [ ] All three contracts call `env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO)` on every write (T-21 mitigation).

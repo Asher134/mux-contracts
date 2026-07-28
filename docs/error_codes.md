@@ -31,6 +31,7 @@ Errors are defined in `MuxAccountFactoryError` (`contracts/mux-account-factory/s
 | `InvalidAccount` | 2 | 400 | `account_address` must differ from `owner` |
 | `TooManyAccounts` | 3 | 409 | Owner has reached the 64-account cap |
 | `MetadataNotFound` | 4 | 404 | No metadata stored for the account |
+| `MetadataTooLarge` | 5 | 400 | A metadata field (`version`, `description`, or `author`) exceeds its size limit |
 | `MetadataTooLarge` | 5 | 400 | Metadata exceeds size limits |
 
 ## Mux Batcher (`contracts/mux-batcher`)

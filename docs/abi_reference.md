@@ -25,6 +25,9 @@ pub struct AccountMetadata {
 | Constant | Value | Description |
 |---|---|---|
 | `MAX_ACCOUNTS_PER_OWNER` | 64 | Maximum accounts per owner (storage griefing cap) |
+| `MAX_VERSION_LENGTH` | 32 | Maximum byte length of the `version` metadata field |
+| `MAX_DESCRIPTION_LENGTH` | 256 | Maximum byte length of the `description` metadata field |
+| `MAX_AUTHOR_LENGTH` | 64 | Maximum byte length of the `author` metadata field |
 | `TTL_THRESHOLD` | 17,280 | ~1 day — TTL extension trigger (ledgers) |
 | `TTL_EXTEND_TO` | 518,400 | ~30 days — TTL extended to (ledgers) |
 
@@ -46,6 +49,7 @@ pub struct AccountMetadata {
 | Topic | Data | Condition |
 |---|---|---|
 | `deployed` | `(owner: Address, account_address: Address)` | Every successful `deploy_account` or `deploy_account_with_metadata` call |
+| `meta_set` | `(owner: Address, account_address: Address, version: String)` | Every successful `deploy_account_with_metadata` call |
 
 ### Errors
 
@@ -55,14 +59,17 @@ pub struct AccountMetadata {
 | `InvalidAccount` | 2 | 400 | `account_address` equals `owner` |
 | `TooManyAccounts` | 3 | 409 | Owner has reached `MAX_ACCOUNTS_PER_OWNER` (64) |
 | `MetadataNotFound` | 4 | 404 | No metadata stored for the specified owner/account pair |
+| `MetadataTooLarge` | 5 | 400 | A metadata field exceeds its size limit (`version` > 32, `description` > 256, or `author` > 64 bytes) |
 
 ### Notes
 
 - `deploy_account` and `deploy_account_with_metadata` require `owner.require_auth()`.
 - Instance storage TTL is extended on every write (`deploy_account*`); read-only calls do not extend TTL.
 - The per-owner cap of 64 accounts prevents unbounded growth of the `Accounts` storage vector (see `docs/storage-griefing.md`).
+- Metadata string size limits (`MAX_VERSION_LENGTH`, `MAX_DESCRIPTION_LENGTH`, `MAX_AUTHOR_LENGTH`) prevent storage bloat through oversized strings; violations return `MetadataTooLarge` (code 5, HTTP 400).
 - `simulate_deploy*` enforces the same Accounts vec bound (and metadata size checks) without writing state.
-- Clients can query `max_accounts_per_owner` before deploy to avoid `TooManyAccounts`.
+- Clients should query `max_accounts_per_owner` before deploy to avoid a `TooManyAccounts` error at execution time.
+- The cap is per-owner: filling one owner's quota does not affect any other owner.
 
 ---
 

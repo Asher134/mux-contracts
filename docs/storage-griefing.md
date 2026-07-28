@@ -148,6 +148,19 @@ Every collection cap has dedicated unit tests that verify the `TooMany*` error p
 |---|---|---|
 | `mux-account` | `test_delegate_cap_enforced` | 65th new delegate returns `TooManyDelegates` |
 | `mux-account` | `test_delegate_cap_allows_update` | Updating an existing delegate at cap succeeds |
+| `mux-account-factory` | `test_accounts_cap_enforced` | 65th deploy via `deploy_account` returns `TooManyAccounts` |
+| `mux-account-factory` | `test_accounts_cap_returns_too_many_accounts` | Error variant is exactly `TooManyAccounts` (code 3) |
+| `mux-account-factory` | `test_deploy_account_with_metadata_enforces_cap` | 65th deploy via `deploy_account_with_metadata` returns `TooManyAccounts` |
+| `mux-account-factory` | `test_simulate_deploy_enforces_cap` | `simulate_deploy` returns `TooManyAccounts` when owner is at cap |
+| `mux-account-factory` | `test_simulate_deploy_with_metadata_enforces_cap` | `simulate_deploy_with_metadata` returns `TooManyAccounts` when owner is at cap |
+| `mux-account-factory` | `test_cap_is_per_owner_not_global` | Filling owner A's cap does not block owner B |
+| `mux-account-factory` | `test_accounts_vec_length_bounded_after_cap` | Accounts vec length stays ≤ 64 after a rejected deploy |
+| `mux-account-factory` | `test_account_count_does_not_increment_on_rejected_deploy` | Global counter does not increase when cap is rejected |
+| `mux-account-factory` | `test_max_accounts_per_owner_returns_64` | Public `max_accounts_per_owner` entrypoint returns 64 |
+| `mux-account-factory` | `test_metadata_version_too_long` | Version string > 32 chars returns `MetadataTooLarge` |
+| `mux-account-factory` | `test_metadata_description_too_long` | Description string > 256 chars returns `MetadataTooLarge` |
+| `mux-account-factory` | `test_metadata_author_too_long` | Author string > 64 chars returns `MetadataTooLarge` |
+| `mux-account-factory` | `test_metadata_at_max_length_succeeds` | Strings exactly at the limit are accepted |
 | `mux-delegation` | `test_too_many_delegates_rejected` | 129th delegate returns `TooManyDelegates` |
 | `mux-delegation` | `test_grant_too_many_permissions_fails` | 65th permission returns `TooManyPermissions` |
 | `mux-permissions` | `test_role_member_cap_enforced` | 257th member returns `TooManyMembers` |
