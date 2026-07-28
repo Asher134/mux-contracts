@@ -68,8 +68,8 @@ Off-chain components (TypeScript SDK, frontend, deployment scripts) are out of s
 | # | Threat | STRIDE | Likelihood | Impact | Mitigation |
 |---|--------|--------|------------|--------|------------|
 | T-01 | Owner key compromise | Spoofing | Medium | Critical | Guardian recovery set; hardware wallet recommendation; time-locked admin operations |
-| T-02 | Delegate key compromise | Spoofing | Medium | High | Spend limits cap damage; time-bounded delegate expiry (`expiry_ledger`) |
-| T-03 | Delegate expiry not enforced | Elevation of Privilege | Low | High | `expiry_ledger` checked on every invocation; stale delegates rejected |
+| T-02 | Delegate key compromise | Spoofing | Medium | High | Spend limits cap damage; time-bounded delegate expiry (`expires_at`) |
+| T-03 | Delegate expiry not enforced | Elevation of Privilege | Low | High | `expires_at` checked against ledger time on every invocation; stale delegates rejected |
 | T-04 | Guardian collusion | Spoofing | Low | Critical | M-of-N guardian threshold (future roadmap) |
 
 ### 4.2 Unauthorized Spending
@@ -138,7 +138,7 @@ All three contracts use **instance storage**, which is shared across all callers
 | `saturating_add` for ledger sequence arithmetic | `mux-account::set_spend_limit`, `debit_spend` |
 | `DataKey::Executing` reentrancy guard | `mux-account::debit_spend`, `mux-batcher::execute_batch` |
 | `MAX_BATCH_SIZE` cap | `mux-batcher` |
-| Delegate `expiry_ledger` | `mux-account` |
+| Delegate `expires_at` timestamp | `mux-account` |
 | Spend limit period reset via ledger sequence | `mux-account` |
 | npm provenance (`--provenance`) | CI publish job |
 | Drift check: committed bindings vs generated | CI `check-binding-drift` job |

@@ -87,7 +87,7 @@ Legend:
 - [ ] `revoke_role` rejects accounts not in the role (`AccountNotInRole` error).
 - [ ] `set_delegate` stores a well-typed `DelegateInfo` struct; no raw address coercion.
 - [ ] `remove_delegate` returns `DelegateNotFound` rather than silently succeeding.
-- [ ] Delegate `expiry_ledger` is enforced at call time, not just at creation time.
+- [ ] Delegate `expires_at` timestamp is enforced at call time, not just at creation time.
 - [ ] `can_spend` flag is correctly propagated to spend-limit checks.
 
 ---

@@ -218,7 +218,7 @@ struct SpendLimit {
 
 struct DelegateInfo {
   address: Address,
-  expiry_ledger: u32,
+  expires_at: u64,
   can_spend: bool,
 }
 
