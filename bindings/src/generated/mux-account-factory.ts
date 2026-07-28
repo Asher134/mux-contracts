@@ -171,6 +171,23 @@ export class MuxAccountFactoryClient {
     return retval.value() as unknown as bigint;
   }
 
+  /**
+   * Return the maximum number of accounts allowed per owner (currently 64).
+   *
+   * Query this before calling deployAccount to avoid a TooManyAccounts error
+   * at execution time.
+   */
+  async maxAccountsPerOwner(sourceKeypair: Keypair): Promise<number> {
+    const tx = await this.buildTx(sourceKeypair, "max_accounts_per_owner", []);
+    const result = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation failed: ${result.error}`);
+    }
+    const retval = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!retval) return 64; // contract constant fallback
+    return retval.value() as unknown as number;
+  }
+
   // â”€â”€ Private helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private async buildTx(
