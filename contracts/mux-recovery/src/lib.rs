@@ -112,6 +112,7 @@ pub enum RecoveryError {
     GuardianAlreadyExists = 8,
     GuardianNotFound = 9,
     MinGuardiansRequired = 10,
+    RecoveryExpired = 11,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
@@ -178,7 +179,19 @@ impl MuxRecovery {
             status: RecoveryStatus::Pending,
         };
         env.storage().instance().set(&DataKey::Recovery, &request);
-        emit(&env, symbol_short!("rec_init"), (guardian, new_owner));
+        // Carry the timelock window in the payload so indexers can surface the
+        // execute/expiry deadlines without a follow-up storage read.
+        emit(
+            &env,
+            symbol_short!("rec_init"),
+            (
+                guardian,
+                new_owner,
+                request.initiated_at,
+                request.executable_at,
+                request.expires_at,
+            ),
+        );
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -216,6 +229,53 @@ impl MuxRecovery {
         env.storage().instance().set(&DataKey::Owner, &new_owner);
         env.storage().instance().set(&DataKey::Recovery, &request);
         emit(&env, symbol_short!("rec_exec"), (guardian, new_owner));
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Add a guardian to the guardian set. Owner only.
+    ///
+    /// The set is capped at `MAX_GUARDIANS` to bound instance-storage growth.
+    pub fn add_guardian(env: Env, guardian: Address) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        let mut guardians: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardians)
+            .ok_or(RecoveryError::NotInitialized)?;
+        if guardians.contains(&guardian) {
+            return Err(RecoveryError::GuardianAlreadyExists);
+        }
+        if guardians.len() >= MAX_GUARDIANS {
+            return Err(RecoveryError::TooManyGuardians);
+        }
+        guardians.push_back(guardian.clone());
+        env.storage().instance().set(&DataKey::Guardians, &guardians);
+        emit(&env, symbol_short!("grd_add"), guardian);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Remove a guardian from the guardian set. Owner only.
+    ///
+    /// At least one guardian must always remain, otherwise recovery would
+    /// become permanently unreachable.
+    pub fn remove_guardian(env: Env, guardian: Address) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        let mut guardians: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardians)
+            .ok_or(RecoveryError::NotInitialized)?;
+        let index = guardians
+            .first_index_of(&guardian)
+            .ok_or(RecoveryError::GuardianNotFound)?;
+        if guardians.len() <= 1 {
+            return Err(RecoveryError::MinGuardiansRequired);
+        }
+        guardians.remove(index);
+        env.storage().instance().set(&DataKey::Guardians, &guardians);
+        emit(&env, symbol_short!("grd_rm"), guardian);
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -711,6 +771,95 @@ mod tests {
         let _rec_init = symbol_short!("rec_init");
         let _rec_cncl = symbol_short!("rec_cncl");
         let _rec_exec = symbol_short!("rec_exec");
+    }
+
+    // ── recovery expiry and event payload (#400) ─────────────────────────────
+
+    #[test]
+    fn test_execute_recovery_after_expiry_rejected() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY + 1);
+        let err = client.try_execute_recovery(&guardian).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::RecoveryExpired);
+    }
+
+    #[test]
+    fn test_expired_pending_recovery_can_be_reinitiated() {
+        let (env, client, _, guardian) = setup();
+        let first_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &first_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_EXPIRY + 1);
+        // The stale request must not block a fresh one.
+        let second_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &second_owner);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+    }
+
+    #[test]
+    fn test_initiate_recovery_event_carries_timelock_window() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        let initiated_at = env.ledger().sequence();
+        client.initiate_recovery(&guardian, &new_owner);
+
+        let events = env.events().all();
+        let (_, _, data) = events.get(1).unwrap();
+        let (ev_guardian, ev_new_owner, ev_initiated, ev_executable, ev_expires): (
+            Address,
+            Address,
+            u32,
+            u32,
+            u32,
+        ) = FromVal::from_val(&env, &data);
+
+        assert_eq!(ev_guardian, guardian);
+        assert_eq!(ev_new_owner, new_owner);
+        assert_eq!(ev_initiated, initiated_at);
+        assert_eq!(ev_executable, initiated_at + RECOVERY_TIMELOCK);
+        assert_eq!(ev_expires, initiated_at + RECOVERY_EXPIRY);
+    }
+
+    #[test]
+    fn test_recovery_does_not_transfer_ownership_until_executed() {
+        let (env, client, owner, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        assert_eq!(client.owner(), owner);
+        client.execute_recovery(&guardian);
+        assert_eq!(client.owner(), new_owner);
+    }
+
+    #[test]
+    fn test_recovery_cannot_be_executed_twice() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        client.execute_recovery(&guardian);
+        let err = client.try_execute_recovery(&guardian).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::NoActiveRecovery);
+    }
+
+    #[test]
+    fn test_cancelled_recovery_can_be_reinitiated() {
+        let (env, client, _, guardian) = setup();
+        let first_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &first_owner);
+        client.cancel_recovery();
+        let second_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &second_owner);
+        assert_eq!(client.recovery_status(), RecoveryStatus::Pending);
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        client.execute_recovery(&guardian);
+        assert_eq!(client.owner(), second_owner);
     }
 
     // ── registry link (#403) ──────────────────────────────────────────────────

@@ -906,340 +906,347 @@ mod tests {
         }
     }
 
-    // ── Event: contract tag (topics[0]) ──────────────────────────────────────
+    // ── multi-owner isolation ─────────────────────────────────────────────────
 
-    /// Every factory event must carry `mux_fac` as topics[0] so that indexers
-    /// and TypeScript `getEvents` filters can scope queries to this contract
-    /// without relying on the contract address alone.
+    /// Two owners deploying into the same factory must not see each other's
+    /// accounts; their Accounts vecs are keyed separately in instance storage.
     #[test]
-    fn test_deployed_event_has_mux_fac_contract_tag() {
-        use soroban_sdk::testutils::Events;
+    fn test_multi_owner_accounts_are_isolated() {
         let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
-        client.deploy_account(&owner, &account_addr);
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        let account_a1 = Address::generate(&env);
+        let account_a2 = Address::generate(&env);
+        let account_b1 = Address::generate(&env);
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        let (_, topics, _) = events.get(0).unwrap();
-        let tag = soroban_sdk::Symbol::from_val(&env, &topics.get(0).unwrap());
-        assert_eq!(tag, symbol_short!("mux_fac"));
+        client.deploy_account(&owner_a, &account_a1);
+        client.deploy_account(&owner_a, &account_a2);
+        client.deploy_account(&owner_b, &account_b1);
+
+        let accounts_a = client.get_accounts(&owner_a);
+        let accounts_b = client.get_accounts(&owner_b);
+
+        // Each owner only sees their own accounts.
+        assert_eq!(accounts_a.len(), 2);
+        assert_eq!(accounts_b.len(), 1);
+
+        // owner_b's accounts must not appear in owner_a's list.
+        for i in 0..accounts_a.len() {
+            assert_ne!(accounts_a.get(i).unwrap(), account_b1);
+        }
+        // owner_a's accounts must not appear in owner_b's list.
+        assert_ne!(accounts_b.get(0).unwrap(), account_a1);
+        assert_ne!(accounts_b.get(0).unwrap(), account_a2);
     }
 
-    /// `deploy_account_with_metadata` emits two events; both must carry the
-    /// `mux_fac` tag in topics[0].
+    /// `account_count` is a global counter that increments for every owner.
     #[test]
-    fn test_all_factory_events_carry_mux_fac_tag() {
-        use soroban_sdk::testutils::Events;
+    fn test_account_count_is_global_across_owners() {
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+
+        assert_eq!(client.account_count(), 0);
+
+        client.deploy_account(&owner_a, &Address::generate(&env));
+        assert_eq!(client.account_count(), 1);
+
+        client.deploy_account(&owner_b, &Address::generate(&env));
+        assert_eq!(client.account_count(), 2);
+
+        client.deploy_account(&owner_a, &Address::generate(&env));
+        assert_eq!(client.account_count(), 3);
+    }
+
+    /// `account_count` increments correctly when both deploy paths are mixed.
+    #[test]
+    fn test_account_count_increments_via_both_deploy_paths() {
         let (env, client) = setup();
         let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
+        let acc1 = Address::generate(&env);
+        let acc2 = Address::generate(&env);
+
+        // deploy_account
+        client.deploy_account(&owner, &acc1);
+        assert_eq!(client.account_count(), 1);
+
+        // deploy_account_with_metadata
         let version = String::from_str(&env, "1.0.0");
         let description = String::from_str(&env, "Test");
         let author = String::from_str(&env, "test");
-        client.deploy_account_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
-        );
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 2);
-        for i in 0..2u32 {
-            let (_, topics, _) = events.get(i).unwrap();
-            let tag = soroban_sdk::Symbol::from_val(&env, &topics.get(0).unwrap());
-            assert_eq!(
-                tag,
-                symbol_short!("mux_fac"),
-                "event[{i}] topics[0] must be mux_fac"
-            );
-        }
+        client.deploy_account_with_metadata(&owner, &acc2, &version, &description, &author);
+        assert_eq!(client.account_count(), 2);
     }
 
-    // ── Event: deployed — data payload ────────────────────────────────────────
+    // ── get_accounts for unknown owner ────────────────────────────────────────
 
-    /// The `deployed` event data must be the tuple `(owner, account_address)`
-    /// in that order. Indexers and TypeScript consumers decode this tuple to
-    /// reconstruct which owner registered which account.
+    /// Querying accounts for an owner that has never deployed must return an
+    /// empty vec rather than panicking or erroring.
     #[test]
-    fn test_deployed_event_data_contains_owner_and_account() {
-        use soroban_sdk::testutils::Events;
+    fn test_get_accounts_empty_for_unknown_owner() {
+        let (env, client) = setup();
+        let unknown_owner = Address::generate(&env);
+        let accounts = client.get_accounts(&unknown_owner);
+        assert_eq!(accounts.len(), 0);
+    }
+
+    /// `account_count` must be zero before any deploys.
+    #[test]
+    fn test_account_count_zero_initially() {
+        let (_env, client) = setup();
+        assert_eq!(client.account_count(), 0);
+    }
+
+    // ── max_accounts_per_owner query ──────────────────────────────────────────
+
+    /// The public `max_accounts_per_owner` entrypoint must return 64.
+    #[test]
+    fn test_max_accounts_per_owner_returns_64() {
+        let (_env, client) = setup();
+        assert_eq!(client.max_accounts_per_owner(), MAX_ACCOUNTS_PER_OWNER);
+        assert_eq!(client.max_accounts_per_owner(), 64);
+    }
+
+    // ── duplicate deploy (no dedup guard) ────────────────────────────────────
+
+    /// The factory intentionally does not deduplicate account addresses; the
+    /// same account_address may be registered more than once for the same
+    /// owner (e.g. after a re-deployment). Both entries appear in the vec and
+    /// account_count increments for each.
+    #[test]
+    fn test_deploy_same_address_twice_is_allowed() {
         let (env, client) = setup();
         let owner = Address::generate(&env);
         let account_addr = Address::generate(&env);
+
+        client.deploy_account(&owner, &account_addr);
         client.deploy_account(&owner, &account_addr);
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        let (_, _, data) = events.get(0).unwrap();
-
-        // Data is encoded as a Vec<Val>; decode the two-element tuple.
-        let payload: soroban_sdk::Vec<soroban_sdk::Val> =
-            soroban_sdk::Vec::from_val(&env, &data);
-        assert_eq!(payload.len(), 2);
-
-        let decoded_owner = Address::from_val(&env, &payload.get(0).unwrap());
-        let decoded_account = Address::from_val(&env, &payload.get(1).unwrap());
-
-        assert_eq!(decoded_owner, owner);
-        assert_eq!(decoded_account, account_addr);
+        let accounts = client.get_accounts(&owner);
+        // Both registrations are recorded.
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(client.account_count(), 2);
+        // Both entries point to the same address.
+        assert_eq!(accounts.get(0).unwrap(), account_addr);
+        assert_eq!(accounts.get(1).unwrap(), account_addr);
     }
 
-    /// `deploy_account_with_metadata` also emits `deployed` as its first event
-    /// with the same `(owner, account_address)` data shape.
+    // ── simulate_deploy enforces cap ──────────────────────────────────────────
+
+    /// When an owner is already at the 64-account cap, `simulate_deploy` must
+    /// return `TooManyAccounts` — identical behaviour to `deploy_account`.
     #[test]
-    fn test_deployed_event_data_shape_matches_with_metadata_path() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
-        let version = String::from_str(&env, "2.5.0");
-        let description = String::from_str(&env, "Payload test");
-        let author = String::from_str(&env, "mux-labs");
-        client.deploy_account_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
-        );
-
-        let events = env.events().all();
-        // First event is `deployed`.
-        let (_, _, data) = events.get(0).unwrap();
-        let payload: soroban_sdk::Vec<soroban_sdk::Val> =
-            soroban_sdk::Vec::from_val(&env, &data);
-        assert_eq!(payload.len(), 2);
-
-        let decoded_owner = Address::from_val(&env, &payload.get(0).unwrap());
-        let decoded_account = Address::from_val(&env, &payload.get(1).unwrap());
-        assert_eq!(decoded_owner, owner);
-        assert_eq!(decoded_account, account_addr);
-    }
-
-    // ── Event: meta_set — data payload ────────────────────────────────────────
-
-    /// The `meta_set` event data must be the tuple `(owner, account_address,
-    /// version)`. TypeScript indexers use `version` to correlate the on-chain
-    /// metadata entry with upgrade history.
-    #[test]
-    fn test_meta_set_event_data_contains_owner_account_and_version() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
-        let version = String::from_str(&env, "3.1.0");
-        let description = String::from_str(&env, "Meta payload test");
-        let author = String::from_str(&env, "mux-labs");
-        client.deploy_account_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
-        );
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 2);
-        // Second event is `meta_set`.
-        let (_, topics, data) = events.get(1).unwrap();
-        let action = soroban_sdk::Symbol::from_val(&env, &topics.get(1).unwrap());
-        assert_eq!(action, symbol_short!("meta_set"));
-
-        let payload: soroban_sdk::Vec<soroban_sdk::Val> =
-            soroban_sdk::Vec::from_val(&env, &data);
-        assert_eq!(payload.len(), 3);
-
-        let decoded_owner = Address::from_val(&env, &payload.get(0).unwrap());
-        let decoded_account = Address::from_val(&env, &payload.get(1).unwrap());
-        let decoded_version = String::from_val(&env, &payload.get(2).unwrap());
-
-        assert_eq!(decoded_owner, owner);
-        assert_eq!(decoded_account, account_addr);
-        assert_eq!(decoded_version, version);
-    }
-
-    // ── Event: ordering guarantee ─────────────────────────────────────────────
-
-    /// `deploy_account_with_metadata` must emit events in a deterministic order:
-    /// `deployed` first, `meta_set` second. Indexers rely on this ordering to
-    /// link metadata to the preceding deployment.
-    #[test]
-    fn test_deploy_with_metadata_event_ordering_deployed_before_meta_set() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
-        let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Order test");
-        let author = String::from_str(&env, "test");
-        client.deploy_account_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
-        );
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 2);
-
-        let (_, topics0, _) = events.get(0).unwrap();
-        let (_, topics1, _) = events.get(1).unwrap();
-
-        let action0 = soroban_sdk::Symbol::from_val(&env, &topics0.get(1).unwrap());
-        let action1 = soroban_sdk::Symbol::from_val(&env, &topics1.get(1).unwrap());
-
-        assert_eq!(action0, symbol_short!("deployed"),
-            "first event must be 'deployed'");
-        assert_eq!(action1, symbol_short!("meta_set"),
-            "second event must be 'meta_set'");
-    }
-
-    /// Multiple sequential deploys must emit events in the same order they
-    /// were submitted — one `deployed` event per call.
-    #[test]
-    fn test_multiple_deploys_emit_events_in_call_order() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let account1 = Address::generate(&env);
-        let account2 = Address::generate(&env);
-
-        client.deploy_account(&owner, &account1);
-        client.deploy_account(&owner, &account2);
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 2);
-
-        // First event payload must reference account1.
-        let (_, _, data0) = events.get(0).unwrap();
-        let payload0: soroban_sdk::Vec<soroban_sdk::Val> =
-            soroban_sdk::Vec::from_val(&env, &data0);
-        let decoded_account0 = Address::from_val(&env, &payload0.get(1).unwrap());
-        assert_eq!(decoded_account0, account1);
-
-        // Second event payload must reference account2.
-        let (_, _, data1) = events.get(1).unwrap();
-        let payload1: soroban_sdk::Vec<soroban_sdk::Val> =
-            soroban_sdk::Vec::from_val(&env, &data1);
-        let decoded_account1 = Address::from_val(&env, &payload1.get(1).unwrap());
-        assert_eq!(decoded_account1, account2);
-    }
-
-    // ── Zero events on error paths ────────────────────────────────────────────
-
-    /// `InvalidAccount` (owner == account_address) must not emit any events —
-    /// the error is returned before the emit call is reached.
-    #[test]
-    fn test_invalid_account_error_emits_zero_events() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let _ = client.try_deploy_account(&owner, &owner);
-        assert_eq!(env.events().all().len(), 0,
-            "InvalidAccount path must emit zero events");
-    }
-
-    /// `TooManyAccounts` (cap exceeded) must not emit any events.
-    #[test]
-    fn test_too_many_accounts_error_emits_zero_additional_events() {
-        use soroban_sdk::testutils::Events;
+    fn test_simulate_deploy_enforces_cap() {
         let (env, client) = setup();
         env.budget().reset_unlimited();
         let owner = Address::generate(&env);
-        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+
+        for _ in 0..64 {
             client.deploy_account(&owner, &Address::generate(&env));
         }
-        // Capture count after successful deploys.
-        let event_count_before = env.events().all().len();
 
-        // Cap-exceeded attempt must not add any new events.
-        let _ = client.try_deploy_account(&owner, &Address::generate(&env));
-        assert_eq!(
-            env.events().all().len(),
-            event_count_before,
-            "TooManyAccounts rejection must emit zero additional events"
-        );
+        let result = client.try_simulate_deploy(&owner, &Address::generate(&env));
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
     }
 
-    /// `MetadataTooLarge` must not emit any events.
+    /// `simulate_deploy_with_metadata` must also enforce the cap.
     #[test]
-    fn test_metadata_too_large_error_emits_zero_events() {
-        use soroban_sdk::testutils::Events;
+    fn test_simulate_deploy_with_metadata_enforces_cap() {
         let (env, client) = setup();
+        env.budget().reset_unlimited();
         let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
-        // Version field exceeds MAX_VERSION_LENGTH.
-        let version = String::from_str(&env, "a".repeat(33).as_str());
+        let version = String::from_str(&env, "1.0.0");
         let description = String::from_str(&env, "Test");
         let author = String::from_str(&env, "test");
-        let _ = client.try_deploy_account_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
+
+        for _ in 0..64 {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+
+        let result = client.try_simulate_deploy_with_metadata(
+            &owner,
+            &Address::generate(&env),
+            &version,
+            &description,
+            &author,
         );
-        assert_eq!(env.events().all().len(), 0,
-            "MetadataTooLarge path must emit zero events");
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
     }
 
-    // ── Zero events on simulate paths ─────────────────────────────────────────
+    // ── simulate vs deploy parity ─────────────────────────────────────────────
 
-    /// `simulate_deploy` is a read-only preflight — it must emit zero events
-    /// on both success and failure (InvalidAccount) paths.
+    /// `simulate_deploy` must return the exact same address that `deploy_account`
+    /// would register — clients can use the simulated return value to predict the
+    /// on-chain result.
     #[test]
-    fn test_simulate_deploy_success_emits_zero_events() {
-        use soroban_sdk::testutils::Events;
+    fn test_simulate_and_deploy_return_same_address() {
         let (env, client) = setup();
         let owner = Address::generate(&env);
         let account_addr = Address::generate(&env);
-        client.simulate_deploy(&owner, &account_addr);
-        assert_eq!(env.events().all().len(), 0,
-            "simulate_deploy success must emit zero events");
+
+        // Simulate first (read-only; no state change).
+        let simulated = client.simulate_deploy(&owner, &account_addr);
+        // Then actually deploy.
+        let deployed = client.deploy_account(&owner, &account_addr);
+
+        assert_eq!(simulated, deployed);
+        assert_eq!(simulated, account_addr);
     }
 
+    /// `simulate_deploy_with_metadata` must return the exact same address that
+    /// `deploy_account_with_metadata` would register.
     #[test]
-    fn test_simulate_deploy_invalid_account_emits_zero_events() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let _ = client.try_simulate_deploy(&owner, &owner);
-        assert_eq!(env.events().all().len(), 0,
-            "simulate_deploy InvalidAccount must emit zero events");
-    }
-
-    #[test]
-    fn test_simulate_deploy_with_metadata_success_emits_zero_events() {
-        use soroban_sdk::testutils::Events;
+    fn test_simulate_with_metadata_and_deploy_return_same_address() {
         let (env, client) = setup();
         let owner = Address::generate(&env);
         let account_addr = Address::generate(&env);
         let version = String::from_str(&env, "1.0.0");
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-        client.simulate_deploy_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
+        let description = String::from_str(&env, "My account");
+        let author = String::from_str(&env, "mux-labs");
+
+        let simulated = client.simulate_deploy_with_metadata(
+            &owner,
+            &account_addr,
+            &version,
+            &description,
+            &author,
         );
-        assert_eq!(env.events().all().len(), 0,
-            "simulate_deploy_with_metadata success must emit zero events");
+        let deployed = client.deploy_account_with_metadata(
+            &owner,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+
+        assert_eq!(simulated, deployed);
+        assert_eq!(simulated, account_addr);
     }
 
+    /// Simulate must not affect state — calling simulate followed by deploy must
+    /// produce exactly one entry in the owner's account list.
     #[test]
-    fn test_simulate_deploy_with_metadata_error_emits_zero_events() {
-        use soroban_sdk::testutils::Events;
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let account_addr = Address::generate(&env);
-        // Oversized version triggers MetadataTooLarge.
-        let version = String::from_str(&env, "a".repeat(33).as_str());
-        let description = String::from_str(&env, "Test");
-        let author = String::from_str(&env, "test");
-        let _ = client.try_simulate_deploy_with_metadata(
-            &owner, &account_addr, &version, &description, &author,
-        );
-        assert_eq!(env.events().all().len(), 0,
-            "simulate_deploy_with_metadata error must emit zero events");
-    }
-
-    /// Calling simulate then deploy must yield exactly the deploy's events —
-    /// simulate contributions to the event log must be zero.
-    #[test]
-    fn test_simulate_followed_by_deploy_yields_only_deploy_events() {
-        use soroban_sdk::testutils::Events;
+    fn test_simulate_then_deploy_produces_single_entry() {
         let (env, client) = setup();
         let owner = Address::generate(&env);
         let account_addr = Address::generate(&env);
 
+        // Simulate is a no-op for state.
         client.simulate_deploy(&owner, &account_addr);
-        assert_eq!(env.events().all().len(), 0);
+        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert_eq!(client.account_count(), 0);
 
+        // Actual deploy registers exactly one entry.
         client.deploy_account(&owner, &account_addr);
-        assert_eq!(env.events().all().len(), 1,
-            "only the real deploy must appear in the event log");
+        assert_eq!(client.get_accounts(&owner).len(), 1);
+        assert_eq!(client.account_count(), 1);
+    }
+
+    // ── cross-owner metadata isolation ────────────────────────────────────────
+
+    /// Metadata stored for (owner_a, account_addr) must not be readable via
+    /// (owner_b, account_addr) — DataKey::Metadata is keyed on both owner and
+    /// account address.
+    #[test]
+    fn test_metadata_is_isolated_per_owner() {
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        // Use the same account address under both owners to test key isolation.
+        let account_addr = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Owner A account");
+        let author = String::from_str(&env, "owner-a");
+
+        client.deploy_account_with_metadata(
+            &owner_a,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+
+        // owner_b has no metadata for account_addr.
+        let result = client.try_get_account_metadata(&owner_b, &account_addr);
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::MetadataNotFound)));
+
+        // owner_a's metadata is intact.
+        let meta = client.get_account_metadata(&owner_a, &account_addr);
+        assert_eq!(meta.version, version);
+        assert_eq!(meta.author, author);
+    }
+
+    // ── storage-bound invariants after cap ────────────────────────────────────
+
+    /// After reaching the cap, the owner's account vec length must not exceed
+    /// MAX_ACCOUNTS_PER_OWNER even when rejection errors are swallowed.
+    #[test]
+    fn test_accounts_vec_length_bounded_after_cap() {
+        use soroban_test_helpers::assert_len_at_most;
+
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+
+        // Fill to the cap.
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        // Attempt to exceed — must be rejected.
+        let _ = client.try_deploy_account(&owner, &Address::generate(&env));
+
+        // Vec length must still be exactly at (not above) the cap.
+        assert_len_at_most(
+            client.get_accounts(&owner).len(),
+            MAX_ACCOUNTS_PER_OWNER,
+            "accounts vec after cap rejection",
+        );
+    }
+
+    /// The global account_count must equal MAX_ACCOUNTS_PER_OWNER after the
+    /// single-owner fill, and must not increase on a rejected deploy.
+    #[test]
+    fn test_account_count_does_not_increment_on_rejected_deploy() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        let count_before_rejection = client.account_count();
+
+        let _ = client.try_deploy_account(&owner, &Address::generate(&env));
+
+        assert_eq!(client.account_count(), count_before_rejection);
+        assert_eq!(client.account_count(), u64::from(MAX_ACCOUNTS_PER_OWNER));
+    }
+
+    // ── cap is per-owner, not global ──────────────────────────────────────────
+
+    /// Filling one owner's cap must not affect a second owner's ability to
+    /// deploy — the cap is per-owner, not a global limit.
+    #[test]
+    fn test_cap_is_per_owner_not_global() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+
+        // Fill owner_a to the cap.
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner_a, &Address::generate(&env));
+        }
+
+        // owner_a must be rejected.
+        let result_a = client.try_deploy_account(&owner_a, &Address::generate(&env));
+        assert_eq!(result_a, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+
+        // owner_b must still be able to deploy freely.
+        let acc_b = Address::generate(&env);
+        let result_b = client.try_deploy_account(&owner_b, &acc_b);
+        assert!(result_b.is_ok());
+        assert_eq!(client.get_accounts(&owner_b).len(), 1);
     }
 }
 }

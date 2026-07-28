@@ -37,7 +37,8 @@ export type MuxWalletRegistryError =
   | "NotInitialized"
   | "AlreadyInitialized"
   | "Unauthorized"
-  | "WalletNotFound";
+  | "WalletNotFound"
+  | "TooManyWallets";
 
 export class MuxWalletRegistryClient {
   private contract: Contract;
@@ -105,6 +106,20 @@ export class MuxWalletRegistryClient {
     return this.simulateRead<Address>(tx);
   }
 
+  /**
+   * Register or overwrite a wallet address with descriptive metadata.
+   *
+   * `sourceKeypair` must be (or be authorised by) the owner set at
+   * initialisation. Calling this with an existing `name` silently replaces
+   * the previous entry and its metadata.
+   *
+   * @param name        Symbolic key (max 10 UTF-8 bytes — Soroban `Symbol` limit).
+   * @param wallet      Wallet address to associate with `name`.
+   * @param label       Short human-readable label for the wallet.
+   * @param description Free-form description or notes.
+   * @throws if the contract is not initialised, the source is not the owner,
+   *         or the wallet cap (128) has been reached (`TooManyWallets`, code 5).
+   */
   async registerWalletWithMetadata(
     sourceKeypair: Keypair,
     name: string,
@@ -121,11 +136,37 @@ export class MuxWalletRegistryClient {
     await this.submit(tx, sourceKeypair);
   }
 
+  /**
+   * Return the metadata for the wallet registered under `name`.
+   *
+   * This is a read-only simulation; no on-chain transaction is submitted and
+   * no auth is required. Only wallets registered via
+   * {@link registerWalletWithMetadata} have metadata; wallets registered
+   * via {@link registerWallet} alone do not.
+   *
+   * @param name Symbolic key to look up.
+   * @throws if no wallet with metadata is registered under `name`
+   *         (`WalletNotFound`, error code 4).
+   */
   async getMetadata(sourceKeypair: Keypair, name: string): Promise<WalletMetadata> {
     const tx = await this.buildTx(sourceKeypair, "get_metadata", [
       xdr.ScVal.scvSymbol(name),
     ]);
     return this.simulateRead<WalletMetadata>(tx);
+  }
+
+  /**
+   * List all registered wallet names.
+   *
+   * This is a read-only simulation; no on-chain transaction is submitted and
+   * no auth is required. Returns an empty array when no wallets have been
+   * registered or the contract is not yet initialized.
+   *
+   * @returns Array of symbolic wallet names (Soroban `Symbol` values, returned as strings).
+   */
+  async listWallets(sourceKeypair: Keypair): Promise<string[]> {
+    const tx = await this.buildTx(sourceKeypair, "list_wallets", []);
+    return this.simulateRead<string[]>(tx);
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
