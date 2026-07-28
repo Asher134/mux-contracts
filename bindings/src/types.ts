@@ -342,3 +342,61 @@ export type MuxWalletRegistryError =
   | "Unauthorized"
   | "WalletNotFound"
   | "TooManyWallets";
+
+/**
+ * Error variants for the `mux-account-factory` contract.
+ *
+ * Mirrors the on-chain `MuxAccountFactoryError` enum
+ * (`contracts/mux-account-factory/src/lib.rs`).
+ *
+ * | Variant          | Code | HTTP | Notes                                       |
+ * |------------------|------|------|---------------------------------------------|
+ * | Unauthorized     |  1   | 401  | Caller is not the registered owner           |
+ * | InvalidAccount   |  2   | 400  | account_address must differ from owner       |
+ * | TooManyAccounts  |  3   | 409  | Per-owner 64-account cap reached             |
+ * | MetadataNotFound |  4   | 404  | No metadata stored for the account           |
+ * | MetadataTooLarge |  5   | 400  | Metadata field exceeds size limit            |
+ */
+export type MuxAccountFactoryError =
+  | "Unauthorized"
+  | "InvalidAccount"
+  | "TooManyAccounts"
+  | "MetadataNotFound"
+  | "MetadataTooLarge";
+
+/**
+ * Maps a `MuxAccountFactoryError` variant or its raw `u32` contract error code
+ * to a human-readable description.
+ *
+ * Mirrors the on-chain `MuxAccountFactoryError` enum in
+ * `contracts/mux-account-factory/src/lib.rs`.
+ *
+ * @example
+ * ```ts
+ * import { muxAccountFactoryErrorMessage } from "./types";
+ * console.log(muxAccountFactoryErrorMessage("TooManyAccounts")); // "owner has reached the 64-account cap"
+ * console.log(muxAccountFactoryErrorMessage(3));                 // "owner has reached the 64-account cap"
+ * ```
+ */
+export function muxAccountFactoryErrorMessage(
+  error: MuxAccountFactoryError | number,
+): string {
+  const codeMap: Record<number, string> = {
+    1: "caller is not the registered owner",
+    2: "account_address must differ from owner",
+    3: "owner has reached the 64-account cap",
+    4: "no metadata stored for the specified account",
+    5: "metadata field exceeds the allowed size limit",
+  };
+
+  const nameMap: Record<MuxAccountFactoryError, number> = {
+    Unauthorized: 1,
+    InvalidAccount: 2,
+    TooManyAccounts: 3,
+    MetadataNotFound: 4,
+    MetadataTooLarge: 5,
+  };
+
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
+  return codeMap[code] ?? "unknown error code";
+}
