@@ -102,13 +102,33 @@ pub struct MuxAccountFactory;
 
 #[contractimpl]
 impl MuxAccountFactory {
-    /// Register a new account for the given owner.
+    /// Register a new account for the given owner without metadata.
     ///
-    /// The caller must be the owner. `account_address` must differ from `owner`
-    /// and must not already be registered for this owner.
+    /// The caller must be `owner` (`owner.require_auth()` is called before any
+    /// storage write).  `account_address` must differ from `owner`.
     ///
-    /// Returns [`MuxAccountFactoryError::TooManyAccounts`] when the owner's
-    /// `Accounts` vec already holds [`MAX_ACCOUNTS_PER_OWNER`] entries.
+    /// Appends `account_address` to the owner's `Accounts` vec and increments
+    /// the global `AccountCount`.  Emits a single `deployed` event.
+    /// Instance storage TTL is extended on every successful call.
+    ///
+    /// # Errors
+    ///
+    /// | Variant | When |
+    /// |---------|------|
+    /// | [`MuxAccountFactoryError::InvalidAccount`] | `account_address == owner` |
+    /// | [`MuxAccountFactoryError::TooManyAccounts`] | owner's Accounts vec is at [`MAX_ACCOUNTS_PER_OWNER`] |
+    ///
+    /// Auth host errors are surfaced as host-level panics, not contract errors.
+    ///
+    /// # Events
+    ///
+    /// Emits `(mux_fac, deployed)` with data `(owner, account_address)`.
+    ///
+    /// # See also
+    ///
+    /// - [`Self::deploy_account_with_metadata`] — same path plus metadata storage
+    /// - [`Self::simulate_deploy`] — dry-run that enforces the same checks
+    /// - [docs/account-factory-flow.md](../../../../../docs/account-factory-flow.md)
     pub fn deploy_account(
         env: Env,
         owner: Address,
@@ -147,6 +167,9 @@ impl MuxAccountFactory {
     }
 
     /// Get all accounts registered for a given owner.
+    ///
+    /// Returns an empty vec for owners that have never deployed — never errors.
+    /// No authorization required.  Does **not** extend TTL.
     pub fn get_accounts(env: Env, owner: Address) -> Vec<Address> {
         env.storage()
             .instance()
@@ -154,7 +177,14 @@ impl MuxAccountFactory {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
-    /// Get the total count of registered accounts.
+    /// Return the total count of registered accounts across **all** owners.
+    ///
+    /// This is a global monotonically-increasing counter.  It increments by 1
+    /// on every successful [`Self::deploy_account`] or
+    /// [`Self::deploy_account_with_metadata`] call regardless of owner.
+    /// Rejected deploys (errors) do **not** increment the counter.
+    ///
+    /// No authorization required.  Does **not** extend TTL.
     pub fn account_count(env: Env) -> u64 {
         env.storage()
             .instance()
@@ -162,13 +192,37 @@ impl MuxAccountFactory {
             .unwrap_or(0)
     }
 
-    /// Register a new account for the given owner with metadata.
+    /// Register a new account for the given owner with optional structured metadata.
     ///
-    /// The caller must be the owner. `account_address` must differ from `owner`
-    /// and must not already be registered for this owner.
+    /// Identical to [`Self::deploy_account`] plus: validates metadata string sizes,
+    /// stores an [`AccountMetadata`] entry, and emits an additional `meta_set` event.
     ///
-    /// Returns [`MuxAccountFactoryError::TooManyAccounts`] when the owner's
-    /// `Accounts` vec already holds [`MAX_ACCOUNTS_PER_OWNER`] entries.
+    /// The caller must be `owner`.  `account_address` must differ from `owner`.
+    /// Metadata strings are individually bounded to prevent storage bloat:
+    ///
+    /// | Field | Max bytes | Constant |
+    /// |-------|-----------|----------|
+    /// | `version` | 32 | `MAX_VERSION_LENGTH` |
+    /// | `description` | 256 | `MAX_DESCRIPTION_LENGTH` |
+    /// | `author` | 64 | `MAX_AUTHOR_LENGTH` |
+    ///
+    /// # Errors
+    ///
+    /// | Variant | When |
+    /// |---------|------|
+    /// | [`MuxAccountFactoryError::InvalidAccount`] | `account_address == owner` |
+    /// | [`MuxAccountFactoryError::TooManyAccounts`] | owner's Accounts vec is at [`MAX_ACCOUNTS_PER_OWNER`] |
+    /// | [`MuxAccountFactoryError::MetadataTooLarge`] | any metadata field exceeds its byte limit |
+    ///
+    /// # Events (in emission order)
+    ///
+    /// 1. `(mux_fac, deployed)` — data `(owner, account_address)`
+    /// 2. `(mux_fac, meta_set)` — data `(owner, account_address, version)`
+    ///
+    /// # See also
+    ///
+    /// - [`Self::simulate_deploy_with_metadata`] — dry-run with identical validation
+    /// - [`Self::get_account_metadata`] — retrieve stored metadata later
     pub fn deploy_account_with_metadata(
         env: Env,
         owner: Address,
@@ -235,7 +289,16 @@ impl MuxAccountFactory {
         Ok(account_address)
     }
 
-    /// Get the metadata for a specific account.
+    /// Return the stored metadata for a specific (owner, account_address) pair.
+    ///
+    /// Returns [`MuxAccountFactoryError::MetadataNotFound`] when the account was
+    /// registered via [`Self::deploy_account`] (no metadata path) or when the
+    /// `(owner, account_address)` pair has never been registered at all.
+    ///
+    /// Metadata is keyed on *both* owner and account address — querying with a
+    /// different owner for the same `account_address` returns `MetadataNotFound`.
+    ///
+    /// No authorization required.  Does **not** extend TTL.
     pub fn get_account_metadata(
         env: Env,
         owner: Address,
@@ -247,13 +310,29 @@ impl MuxAccountFactory {
             .ok_or(MuxAccountFactoryError::MetadataNotFound)
     }
 
-    /// Validate a deploy_account call without writing any state (dry-run).
+    /// Preflight / dry-run of [`Self::deploy_account`].
     ///
-    /// Returns the account address that *would* be registered, or the same
-    /// error that `deploy_account` would return — including
+    /// Returns the account address that *would* be registered, or the **same
+    /// error** that the real deploy would return — including
     /// [`MuxAccountFactoryError::TooManyAccounts`] when the owner's Accounts
-    /// vec is already at [`MAX_ACCOUNTS_PER_OWNER`].  No storage is modified
-    /// and no events are emitted.
+    /// vec is already at [`MAX_ACCOUNTS_PER_OWNER`].
+    ///
+    /// **No storage is written and no events are emitted.**  This entrypoint is
+    /// safe to call without paying for a state-mutating transaction.
+    ///
+    /// The simulate path mirrors the deploy path exactly so that clients can
+    /// use the return value to predict the on-chain result:
+    ///
+    /// ```text
+    /// simulated = simulate_deploy(owner, addr)  // read-only
+    /// deployed  = deploy_account(owner, addr)   // state-mutating
+    /// assert_eq!(simulated, deployed)           // always true
+    /// ```
+    ///
+    /// # See also
+    ///
+    /// - [`Self::max_accounts_per_owner`] — query the cap constant
+    /// - [docs/account-factory-flow.md § Preflight Pattern](../../../../../docs/account-factory-flow.md#preflight-pattern)
     pub fn simulate_deploy(
         env: Env,
         owner: Address,
@@ -267,11 +346,15 @@ impl MuxAccountFactory {
         Ok(account_address)
     }
 
-    /// Validate a deploy_account_with_metadata call without writing any state
-    /// (dry-run).  No storage is modified and no events are emitted.
+    /// Preflight / dry-run of [`Self::deploy_account_with_metadata`].
     ///
-    /// Enforces the same Accounts vec bound as
-    /// [`Self::deploy_account_with_metadata`].
+    /// Enforces the same Accounts vec cap as
+    /// [`Self::deploy_account_with_metadata`] and validates all three metadata
+    /// string size limits.  **No storage is written and no events are emitted.**
+    ///
+    /// Use this to catch [`MuxAccountFactoryError::MetadataTooLarge`] or
+    /// [`MuxAccountFactoryError::TooManyAccounts`] before paying for a
+    /// state-mutating transaction.
     pub fn simulate_deploy_with_metadata(
         env: Env,
         owner: Address,
@@ -293,10 +376,21 @@ impl MuxAccountFactory {
         Ok(account_address)
     }
 
-    /// Return the maximum number of accounts permitted per owner.
+    /// Return the maximum number of accounts permitted per owner (`64`).
     ///
-    /// Callers (including TypeScript bindings) can query this before deploy to
-    /// avoid a `TooManyAccounts` error at execution time.
+    /// TypeScript clients and other on-chain callers should query this before
+    /// calling `deploy_account` so that they can surface a friendly error
+    /// rather than burning fees on a predictably-failing transaction.
+    ///
+    /// The value is a compile-time constant (`MAX_ACCOUNTS_PER_OWNER`); this
+    /// entrypoint exists so clients never need to hardcode the number.
+    ///
+    /// No authorization required.  Does **not** extend TTL.  No state written.
+    ///
+    /// # See also
+    ///
+    /// - [`Self::simulate_deploy`] — full preflight including the cap check
+    /// - [docs/account-factory-flow.md § Preflight Pattern](../../../../../docs/account-factory-flow.md#preflight-pattern)
     pub fn max_accounts_per_owner(_env: Env) -> u32 {
         MAX_ACCOUNTS_PER_OWNER
     }
