@@ -905,5 +905,348 @@ mod tests {
             assert!(sym.to_val().len() <= 8);
         }
     }
+
+    // ── multi-owner isolation ─────────────────────────────────────────────────
+
+    /// Two owners deploying into the same factory must not see each other's
+    /// accounts; their Accounts vecs are keyed separately in instance storage.
+    #[test]
+    fn test_multi_owner_accounts_are_isolated() {
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        let account_a1 = Address::generate(&env);
+        let account_a2 = Address::generate(&env);
+        let account_b1 = Address::generate(&env);
+
+        client.deploy_account(&owner_a, &account_a1);
+        client.deploy_account(&owner_a, &account_a2);
+        client.deploy_account(&owner_b, &account_b1);
+
+        let accounts_a = client.get_accounts(&owner_a);
+        let accounts_b = client.get_accounts(&owner_b);
+
+        // Each owner only sees their own accounts.
+        assert_eq!(accounts_a.len(), 2);
+        assert_eq!(accounts_b.len(), 1);
+
+        // owner_b's accounts must not appear in owner_a's list.
+        for i in 0..accounts_a.len() {
+            assert_ne!(accounts_a.get(i).unwrap(), account_b1);
+        }
+        // owner_a's accounts must not appear in owner_b's list.
+        assert_ne!(accounts_b.get(0).unwrap(), account_a1);
+        assert_ne!(accounts_b.get(0).unwrap(), account_a2);
+    }
+
+    /// `account_count` is a global counter that increments for every owner.
+    #[test]
+    fn test_account_count_is_global_across_owners() {
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+
+        assert_eq!(client.account_count(), 0);
+
+        client.deploy_account(&owner_a, &Address::generate(&env));
+        assert_eq!(client.account_count(), 1);
+
+        client.deploy_account(&owner_b, &Address::generate(&env));
+        assert_eq!(client.account_count(), 2);
+
+        client.deploy_account(&owner_a, &Address::generate(&env));
+        assert_eq!(client.account_count(), 3);
+    }
+
+    /// `account_count` increments correctly when both deploy paths are mixed.
+    #[test]
+    fn test_account_count_increments_via_both_deploy_paths() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let acc1 = Address::generate(&env);
+        let acc2 = Address::generate(&env);
+
+        // deploy_account
+        client.deploy_account(&owner, &acc1);
+        assert_eq!(client.account_count(), 1);
+
+        // deploy_account_with_metadata
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Test");
+        let author = String::from_str(&env, "test");
+        client.deploy_account_with_metadata(&owner, &acc2, &version, &description, &author);
+        assert_eq!(client.account_count(), 2);
+    }
+
+    // ── get_accounts for unknown owner ────────────────────────────────────────
+
+    /// Querying accounts for an owner that has never deployed must return an
+    /// empty vec rather than panicking or erroring.
+    #[test]
+    fn test_get_accounts_empty_for_unknown_owner() {
+        let (env, client) = setup();
+        let unknown_owner = Address::generate(&env);
+        let accounts = client.get_accounts(&unknown_owner);
+        assert_eq!(accounts.len(), 0);
+    }
+
+    /// `account_count` must be zero before any deploys.
+    #[test]
+    fn test_account_count_zero_initially() {
+        let (_env, client) = setup();
+        assert_eq!(client.account_count(), 0);
+    }
+
+    // ── max_accounts_per_owner query ──────────────────────────────────────────
+
+    /// The public `max_accounts_per_owner` entrypoint must return 64.
+    #[test]
+    fn test_max_accounts_per_owner_returns_64() {
+        let (_env, client) = setup();
+        assert_eq!(client.max_accounts_per_owner(), MAX_ACCOUNTS_PER_OWNER);
+        assert_eq!(client.max_accounts_per_owner(), 64);
+    }
+
+    // ── duplicate deploy (no dedup guard) ────────────────────────────────────
+
+    /// The factory intentionally does not deduplicate account addresses; the
+    /// same account_address may be registered more than once for the same
+    /// owner (e.g. after a re-deployment). Both entries appear in the vec and
+    /// account_count increments for each.
+    #[test]
+    fn test_deploy_same_address_twice_is_allowed() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+
+        client.deploy_account(&owner, &account_addr);
+        client.deploy_account(&owner, &account_addr);
+
+        let accounts = client.get_accounts(&owner);
+        // Both registrations are recorded.
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(client.account_count(), 2);
+        // Both entries point to the same address.
+        assert_eq!(accounts.get(0).unwrap(), account_addr);
+        assert_eq!(accounts.get(1).unwrap(), account_addr);
+    }
+
+    // ── simulate_deploy enforces cap ──────────────────────────────────────────
+
+    /// When an owner is already at the 64-account cap, `simulate_deploy` must
+    /// return `TooManyAccounts` — identical behaviour to `deploy_account`.
+    #[test]
+    fn test_simulate_deploy_enforces_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+
+        for _ in 0..64 {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+
+        let result = client.try_simulate_deploy(&owner, &Address::generate(&env));
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+    }
+
+    /// `simulate_deploy_with_metadata` must also enforce the cap.
+    #[test]
+    fn test_simulate_deploy_with_metadata_enforces_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Test");
+        let author = String::from_str(&env, "test");
+
+        for _ in 0..64 {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+
+        let result = client.try_simulate_deploy_with_metadata(
+            &owner,
+            &Address::generate(&env),
+            &version,
+            &description,
+            &author,
+        );
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+    }
+
+    // ── simulate vs deploy parity ─────────────────────────────────────────────
+
+    /// `simulate_deploy` must return the exact same address that `deploy_account`
+    /// would register — clients can use the simulated return value to predict the
+    /// on-chain result.
+    #[test]
+    fn test_simulate_and_deploy_return_same_address() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+
+        // Simulate first (read-only; no state change).
+        let simulated = client.simulate_deploy(&owner, &account_addr);
+        // Then actually deploy.
+        let deployed = client.deploy_account(&owner, &account_addr);
+
+        assert_eq!(simulated, deployed);
+        assert_eq!(simulated, account_addr);
+    }
+
+    /// `simulate_deploy_with_metadata` must return the exact same address that
+    /// `deploy_account_with_metadata` would register.
+    #[test]
+    fn test_simulate_with_metadata_and_deploy_return_same_address() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "My account");
+        let author = String::from_str(&env, "mux-labs");
+
+        let simulated = client.simulate_deploy_with_metadata(
+            &owner,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+        let deployed = client.deploy_account_with_metadata(
+            &owner,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+
+        assert_eq!(simulated, deployed);
+        assert_eq!(simulated, account_addr);
+    }
+
+    /// Simulate must not affect state — calling simulate followed by deploy must
+    /// produce exactly one entry in the owner's account list.
+    #[test]
+    fn test_simulate_then_deploy_produces_single_entry() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+
+        // Simulate is a no-op for state.
+        client.simulate_deploy(&owner, &account_addr);
+        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert_eq!(client.account_count(), 0);
+
+        // Actual deploy registers exactly one entry.
+        client.deploy_account(&owner, &account_addr);
+        assert_eq!(client.get_accounts(&owner).len(), 1);
+        assert_eq!(client.account_count(), 1);
+    }
+
+    // ── cross-owner metadata isolation ────────────────────────────────────────
+
+    /// Metadata stored for (owner_a, account_addr) must not be readable via
+    /// (owner_b, account_addr) — DataKey::Metadata is keyed on both owner and
+    /// account address.
+    #[test]
+    fn test_metadata_is_isolated_per_owner() {
+        let (env, client) = setup();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        // Use the same account address under both owners to test key isolation.
+        let account_addr = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Owner A account");
+        let author = String::from_str(&env, "owner-a");
+
+        client.deploy_account_with_metadata(
+            &owner_a,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+
+        // owner_b has no metadata for account_addr.
+        let result = client.try_get_account_metadata(&owner_b, &account_addr);
+        assert_eq!(result, Err(Ok(MuxAccountFactoryError::MetadataNotFound)));
+
+        // owner_a's metadata is intact.
+        let meta = client.get_account_metadata(&owner_a, &account_addr);
+        assert_eq!(meta.version, version);
+        assert_eq!(meta.author, author);
+    }
+
+    // ── storage-bound invariants after cap ────────────────────────────────────
+
+    /// After reaching the cap, the owner's account vec length must not exceed
+    /// MAX_ACCOUNTS_PER_OWNER even when rejection errors are swallowed.
+    #[test]
+    fn test_accounts_vec_length_bounded_after_cap() {
+        use soroban_test_helpers::assert_len_at_most;
+
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+
+        // Fill to the cap.
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        // Attempt to exceed — must be rejected.
+        let _ = client.try_deploy_account(&owner, &Address::generate(&env));
+
+        // Vec length must still be exactly at (not above) the cap.
+        assert_len_at_most(
+            client.get_accounts(&owner).len(),
+            MAX_ACCOUNTS_PER_OWNER,
+            "accounts vec after cap rejection",
+        );
+    }
+
+    /// The global account_count must equal MAX_ACCOUNTS_PER_OWNER after the
+    /// single-owner fill, and must not increase on a rejected deploy.
+    #[test]
+    fn test_account_count_does_not_increment_on_rejected_deploy() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        let count_before_rejection = client.account_count();
+
+        let _ = client.try_deploy_account(&owner, &Address::generate(&env));
+
+        assert_eq!(client.account_count(), count_before_rejection);
+        assert_eq!(client.account_count(), u64::from(MAX_ACCOUNTS_PER_OWNER));
+    }
+
+    // ── cap is per-owner, not global ──────────────────────────────────────────
+
+    /// Filling one owner's cap must not affect a second owner's ability to
+    /// deploy — the cap is per-owner, not a global limit.
+    #[test]
+    fn test_cap_is_per_owner_not_global() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+
+        // Fill owner_a to the cap.
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner_a, &Address::generate(&env));
+        }
+
+        // owner_a must be rejected.
+        let result_a = client.try_deploy_account(&owner_a, &Address::generate(&env));
+        assert_eq!(result_a, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+
+        // owner_b must still be able to deploy freely.
+        let acc_b = Address::generate(&env);
+        let result_b = client.try_deploy_account(&owner_b, &acc_b);
+        assert!(result_b.is_ok());
+        assert_eq!(client.get_accounts(&owner_b).len(), 1);
+    }
 }
 }

@@ -30,6 +30,88 @@ describe("MuxAccountFactoryClient shape", () => {
   it("exposes getAccountMetadata as a function", () => {
     expect(typeof MuxAccountFactoryClient.prototype.getAccountMetadata).toBe("function");
   });
+
+  it("exposes simulateDeploy as a function", () => {
+    expect(typeof MuxAccountFactoryClient.prototype.simulateDeploy).toBe("function");
+  });
+
+  it("exposes simulateDeployWithMetadata as a function", () => {
+    expect(typeof MuxAccountFactoryClient.prototype.simulateDeployWithMetadata).toBe("function");
+  });
+
+  it("exposes maxAccountsPerOwner as a function", () => {
+    expect(typeof MuxAccountFactoryClient.prototype.maxAccountsPerOwner).toBe("function");
+  });
+
+  it("simulateDeploy accepts owner and accountAddress arguments", () => {
+    // 3 args: sourceKeypair, owner, accountAddress
+    expect(MuxAccountFactoryClient.prototype.simulateDeploy.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("simulateDeployWithMetadata accepts owner, accountAddress, version, description, author", () => {
+    // 6 args: sourceKeypair, owner, accountAddress, version, description, author
+    expect(MuxAccountFactoryClient.prototype.simulateDeployWithMetadata.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("maxAccountsPerOwner accepts a keypair argument", () => {
+    expect(MuxAccountFactoryClient.prototype.maxAccountsPerOwner.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("MuxRegistryClient shape", () => {
+  it("exposes initialize as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.initialize).toBe("function");
+  });
+
+  it("exposes register as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.register).toBe("function");
+  });
+
+  it("exposes registerWithMetadata as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.registerWithMetadata).toBe("function");
+  });
+
+  it("exposes getVersion as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.getVersion).toBe("function");
+  });
+
+  it("exposes registerWithMetadata as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.registerWithMetadata).toBe("function");
+  });
+
+  it("exposes getMetadata as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.getMetadata).toBe("function");
+  });
+
+  it("exposes listContracts as a function", () => {
+    expect(typeof MuxRegistryClient.prototype.listContracts).toBe("function");
+  });
+});
+
+describe("Factory and registry error HTTP mapping", () => {
+  it("maps InvalidAccount to 400", () => {
+    expect(ERROR_HTTP_MAP.InvalidAccount).toBe(400);
+  });
+
+  it("maps TooManyAccounts to 409", () => {
+    expect(ERROR_HTTP_MAP.TooManyAccounts).toBe(409);
+  });
+
+  it("maps MetadataNotFound to 404", () => {
+    expect(ERROR_HTTP_MAP.MetadataNotFound).toBe(404);
+  });
+
+  it("maps MetadataTooLarge to 400", () => {
+    expect(ERROR_HTTP_MAP.MetadataTooLarge).toBe(400);
+  });
+
+  it("maps ContractNotFound to 404", () => {
+    expect(ERROR_HTTP_MAP.ContractNotFound).toBe(404);
+  });
+
+  it("maps TooManyContracts to 409", () => {
+    expect(ERROR_HTTP_MAP.TooManyContracts).toBe(409);
+  });
 });
 
 describe("MuxRegistryClient shape", () => {
