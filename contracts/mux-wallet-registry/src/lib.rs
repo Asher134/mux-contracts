@@ -121,6 +121,18 @@ const MAX_WALLETS: u32 = 128;
 const TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
+// ── Event helpers ─────────────────────────────────────────────────────────────
+
+/// Publish a contract event with the `mux_wreg` topic prefix.
+///
+/// # Arguments
+/// * `action` – short symbol identifying the action (≤ 8 chars).
+/// * `data`   – event payload; serialised as the event body.
+fn emit(env: &Env, action: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
+    env.events()
+        .publish((symbol_short!("mux_wreg"), action), data);
+}
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 /// Named wallet address registry.
@@ -151,6 +163,7 @@ impl MuxWalletRegistry {
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
         emit(&env, symbol_short!("init"), owner);
         Self::extend_ttl(&env);
+        emit(&env, symbol_short!("init"), owner);
         Ok(())
     }
 
@@ -188,6 +201,7 @@ impl MuxWalletRegistry {
             .set(&DataKey::Wallet(name.clone()), &wallet);
         emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Self::extend_ttl(&env);
+        emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Ok(())
     }
 
@@ -206,7 +220,19 @@ impl MuxWalletRegistry {
             .ok_or(WalletRegistryError::WalletNotFound)
     }
 
-    /// Register (or update) a wallet with metadata. Owner only.
+    /// Register or overwrite a wallet address with descriptive metadata.
+    ///
+    /// Only the owner recorded at initialisation may call this method;
+    /// the owner address must authorise the invocation. Calling this with
+    /// an existing `name` silently replaces the previous entry and its metadata.
+    ///
+    /// Emits a `wlt_regm` event with `(name, wallet)` as the payload on
+    /// successful registration.
+    ///
+    /// # Errors
+    /// - [`WalletRegistryError::NotInitialized`] if `initialize` was never called.
+    /// - [`WalletRegistryError::TooManyWallets`] (code 5) if the wallet cap
+    ///   (128) has been reached.
     pub fn register_wallet_with_metadata(
         env: Env,
         name: Symbol,
@@ -238,10 +264,22 @@ impl MuxWalletRegistry {
             .set(&DataKey::Metadata(name.clone()), &meta);
         emit(&env, symbol_short!("wlt_meta"), (name, wallet));
         Self::extend_ttl(&env);
+        emit(&env, symbol_short!("wlt_regm"), (name, wallet));
         Ok(())
     }
 
     /// Return the metadata for a wallet registered under `name`.
+    ///
+    /// This is a read-only method; no authorisation is required.
+    ///
+    /// Only wallets registered via [`Self::register_wallet_with_metadata`] have
+    /// metadata. Wallets registered via [`Self::register_wallet`] alone do not,
+    /// and this method will return [`WalletRegistryError::WalletNotFound`] for
+    /// those names.
+    ///
+    /// # Errors
+    /// - [`WalletRegistryError::WalletNotFound`] if no wallet with metadata is
+    ///   registered under `name`.
     pub fn get_metadata(env: Env, name: Symbol) -> Result<WalletMetadata, WalletRegistryError> {
         env.storage()
             .instance()
@@ -251,8 +289,9 @@ impl MuxWalletRegistry {
 
     /// List all registered wallet names.
     ///
-    /// Returns an empty vec if `initialize` has not been called yet.
-    /// No authorisation is required.
+    /// Returns an empty [`Vec`] when no wallets have been registered *or* when
+    /// the contract has not yet been initialised (i.e. [`Self::initialize`] has
+    /// not been called). No authorisation is required.
     pub fn list_wallets(env: Env) -> Vec<Symbol> {
         env.storage()
             .instance()
