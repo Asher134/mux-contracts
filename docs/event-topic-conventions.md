@@ -40,6 +40,7 @@ Rules:
 | `mux-policy` | `mux_pol` |
 | `mux-spending-policy` | `mux_spend` |
 | `mux-registry` | `mux_reg` |
+| `mux-wallet-registry` | `mux_wreg` |
 | `mux-recovery` | `mux_recv` |
 
 Tags are snake-ish abbreviations under 9 chars. Do not reuse a tag across crates.
