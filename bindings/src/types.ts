@@ -66,6 +66,54 @@ export type MuxRecoveryError =
   | "NoActiveRecovery"
   | "TimelockNotExpired";
 
+// ── Recovery timelock constants ───────────────────────────────────────────────
+
+/**
+ * Minimum number of ledgers that must elapse between `initiate_recovery`
+ * and `execute_recovery`.
+ *
+ * Mirrors the on-chain `RECOVERY_TIMELOCK` constant in
+ * `contracts/mux-recovery/src/lib.rs`.
+ *
+ * At ~5-second ledger close times this is approximately **24 hours**:
+ * ```
+ * 17_280 ledgers × 5 s/ledger = 86_400 s = 24 h
+ * ```
+ *
+ * Off-chain tooling can compute the earliest execution ledger without an
+ * RPC read:
+ * ```ts
+ * const executableAt = initiatedAt + RECOVERY_TIMELOCK_LEDGERS;
+ * ```
+ *
+ * This value is encoded in `rec_init` event payloads (`executable_at`).
+ * It is a **stable ABI constant** — changing it is a breaking change.
+ */
+export const RECOVERY_TIMELOCK_LEDGERS = 17_280 as const;
+
+/**
+ * Maximum number of ledgers after initiation during which a recovery
+ * can be executed. After this window the request is considered expired
+ * and a new recovery must be initiated.
+ *
+ * Mirrors the on-chain `RECOVERY_EXPIRY` constant in
+ * `contracts/mux-recovery/src/lib.rs`.
+ *
+ * At ~5-second ledger close times this is approximately **7 days**:
+ * ```
+ * 120_960 ledgers × 5 s/ledger = 604_800 s = 7 days
+ * ```
+ *
+ * Off-chain tooling can compute the expiry ledger without an RPC read:
+ * ```ts
+ * const expiresAt = initiatedAt + RECOVERY_EXPIRY_LEDGERS;
+ * ```
+ *
+ * This value is encoded in `rec_init` event payloads (`expires_at`).
+ * It is a **stable ABI constant** — changing it is a breaking change.
+ */
+export const RECOVERY_EXPIRY_LEDGERS = 120_960 as const;
+
 export type MuxBatcherError =
   | "EmptyBatch"
   | "BatchTooLarge"
