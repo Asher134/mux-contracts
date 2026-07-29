@@ -53,6 +53,12 @@ describe("Batch Integration Tests (mux-batcher)", () => {
     expect(config.contracts.muxBatcher).toBeDefined();
   });
 
+  it("bindings expose estimateFees on MuxBatcherClient", () => {
+    // Verify the TypeScript binding exposes the estimateFees helper method
+    const { MuxBatcherClient } = require("../src/generated/mux-batcher");
+    expect(typeof MuxBatcherClient.prototype.estimateFees).toBe("function");
+  });
+
   it("can reach the configured RPC endpoint", async () => {
     const available = await isNetworkAvailable();
     expect(typeof available).toBe("boolean");
