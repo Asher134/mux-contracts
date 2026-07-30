@@ -11,7 +11,8 @@
 `estimate_fees` is a pure, read-only function that returns a conservative
 fee estimate (in stroops) for a batch of a given size.  It lets TypeScript
 clients and off-chain orchestrators compute expected costs **before**
-constructing or submitting a real transaction.
+constructing or submitting a real transaction. It is exposed in the TypeScript
+bindings as `MuxBatcherClient.estimateFees`.
 
 Combining `estimate_fees` with `simulate_batch` gives a complete preflight
 picture: shape validation + cost projection, with no on-chain side effects.

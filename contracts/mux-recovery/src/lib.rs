@@ -352,6 +352,23 @@ impl MuxRecovery {
         Ok(())
     }
 
+    /// Admin-approved recovery: allow the current owner to approve and
+    /// execute a pending recovery immediately. This is intended for cases
+    /// where the owner consents to transfer without waiting the timelock.
+    pub fn approve_recovery_admin(env: Env) -> Result<(), RecoveryError> {
+        // Ensure caller is the current owner.
+        Self::require_owner(&env)?;
+        let mut request = Self::require_pending(&env)?;
+        let new_owner = request.new_owner.clone();
+        request.status = RecoveryStatus::Executed;
+        env.storage().instance().set(&DataKey::Owner, &new_owner);
+        env.storage().instance().set(&DataKey::Recovery, &request);
+        // Emit a distinct audit event for owner-approved recoveries.
+        emit(&env, symbol_short!("rec_adm"), (new_owner.clone()));
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
     /// Add a guardian to the guardian set. Owner only.
     ///
     /// The set is capped at `MAX_GUARDIANS` to bound instance-storage growth.
