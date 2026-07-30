@@ -30,7 +30,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map,
-    String, Vec,
+    String, Symbol, Val, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -100,7 +100,8 @@ pub struct SpendLimit {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DelegateInfo {
     pub address: Address,
-    pub expiry_ledger: u32,
+    /// Unix timestamp at which this delegation stops being valid.
+    pub expires_at: u64,
     pub can_spend: bool,
 }
 
@@ -119,6 +120,14 @@ pub struct SessionKeyRecord {
     pub expires_at: u64,
     pub scopes: Vec<Scope>,
     pub revoked: bool,
+}
+
+/// Audit payload emitted after a successful session execution.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionExecutedEvent {
+    pub session_key: Address,
+    pub payload_len: u32,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -214,7 +223,7 @@ impl MuxAccount {
     pub fn set_delegate(
         env: Env,
         delegate: Address,
-        expiry_ledger: u32,
+        expires_at: u64,
         can_spend: bool,
     ) -> Result<(), MuxAccountError> {
         Self::require_not_paused(&env)?;
@@ -225,6 +234,21 @@ impl MuxAccount {
             .get(&DataKey::Delegates)
             .ok_or(MuxAccountError::NotInitialized)?;
 
+        // Reclaim expired entries before applying the cap. This keeps storage
+        // bounded without allowing stale delegates to permanently exhaust it.
+        if !delegates.contains_key(delegate.clone()) {
+            let current_ledger = env.ledger().sequence();
+            let mut expired = Vec::new(&env);
+            for (address, info) in delegates.iter() {
+                if Self::is_delegate_expired(&info, current_ledger) {
+                    expired.push_back(address);
+                }
+            }
+            for address in expired.iter() {
+                delegates.remove(address);
+            }
+        }
+
         // STORAGE-GRIEFING: reject new entries beyond the cap; updates to existing
         // delegates are always allowed since they don't grow the map.
         if !delegates.contains_key(delegate.clone()) && delegates.len() >= MAX_DELEGATES {
@@ -234,7 +258,7 @@ impl MuxAccount {
             delegate.clone(),
             DelegateInfo {
                 address: delegate.clone(),
-                expiry_ledger,
+                expires_at,
                 can_spend,
             },
         );
@@ -244,7 +268,7 @@ impl MuxAccount {
         emit(
             &env,
             symbol_short!("dlg_set"),
-            (delegate, expiry_ledger, can_spend),
+            (delegate, expires_at, can_spend),
         );
         Self::extend_ttl(&env);
         Ok(())
@@ -311,7 +335,34 @@ impl MuxAccount {
         Self::require_not_paused(&env)?;
         let caller = env.current_contract_address();
         caller.require_auth();
+        Self::apply_spend(&env, &asset, spend)?;
+        emit(&env, symbol_short!("debited"), (asset, spend));
+        Self::extend_ttl(&env);
+        Ok(())
+    }
 
+    /// Execute a contract call and account for its asset spend atomically.
+    pub fn execute(
+        env: Env,
+        target: Address,
+        function: Symbol,
+        args: Vec<Val>,
+        asset: Address,
+        spend: i128,
+    ) -> Result<Val, MuxAccountError> {
+        Self::require_not_paused(&env)?;
+        Self::require_owner(&env)?;
+        Self::apply_spend(&env, &asset, spend)?;
+        let result = env.invoke_contract::<Val>(&target, &function, args);
+        emit(&env, symbol_short!("executed"), (target, asset, spend));
+        Self::extend_ttl(&env);
+        Ok(result)
+    }
+
+    fn apply_spend(env: &Env, asset: &Address, spend: i128) -> Result<(), MuxAccountError> {
+        if spend <= 0 {
+            return Err(MuxAccountError::InvalidAmount);
+        }
         // Reentrancy guard: reject if a debit_spend call is already in progress.
         // On error return Soroban rolls back storage, so the flag is self-cleaning.
         if env
@@ -350,8 +401,6 @@ impl MuxAccount {
         // Clear reentrancy guard so subsequent top-level calls succeed.
         env.storage().instance().remove(&DataKey::Executing);
 
-        emit(&env, symbol_short!("debited"), (asset, spend));
-        Self::extend_ttl(&env);
         Ok(())
     }
 
@@ -372,7 +421,7 @@ impl MuxAccount {
             .ok_or(MuxAccountError::NotInitialized)?;
         let mut active_delegates: Map<Address, DelegateInfo> = Map::new(&env);
         for (delegate, info) in delegates.iter() {
-            if !Self::is_delegate_expired(&info, env.ledger().sequence()) {
+            if !Self::is_delegate_expired(&info, env.ledger().timestamp()) {
                 active_delegates.set(delegate, info);
             }
         }
@@ -389,7 +438,7 @@ impl MuxAccount {
         let info = delegates
             .get(delegate.clone())
             .ok_or(MuxAccountError::DelegateNotFound)?;
-        if Self::is_delegate_expired(&info, env.ledger().sequence()) {
+        if Self::is_delegate_expired(&info, env.ledger().timestamp()) {
             return Err(MuxAccountError::DelegateExpired);
         }
         Ok(info)
@@ -401,6 +450,57 @@ impl MuxAccount {
             .instance()
             .get(&DataKey::GuardianSet)
             .ok_or(MuxAccountError::NotInitialized)
+    }
+
+    /// Register or replace a session key. Owner only.
+    pub fn register_session_key(
+        env: Env,
+        session_key: Address,
+        expires_at: u64,
+        scopes: Vec<Scope>,
+    ) -> Result<(), MuxAccountError> {
+        Self::require_not_paused(&env)?;
+        Self::require_owner(&env)?;
+        let owner = Self::stored_owner(&env)?;
+        let key = DataKey::SessionKey(owner.clone(), session_key.clone());
+        if !env.storage().instance().has(&key) {
+            Self::require_session_key_cap(&env, &owner)?;
+            let index_key = DataKey::SessionKeyIndex(owner);
+            let mut index: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&index_key)
+                .unwrap_or_else(|| Vec::new(&env));
+            index.push_back(session_key.clone());
+            env.storage().instance().set(&index_key, &index);
+        }
+        env.storage().instance().set(
+            &key,
+            &SessionKeyRecord {
+                expires_at,
+                scopes,
+                revoked: false,
+            },
+        );
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Revoke a registered session key. Owner only.
+    pub fn revoke_session_key(env: Env, session_key: Address) -> Result<(), MuxAccountError> {
+        Self::require_not_paused(&env)?;
+        Self::require_owner(&env)?;
+        let owner = Self::stored_owner(&env)?;
+        let key = DataKey::SessionKey(owner, session_key);
+        let mut record: SessionKeyRecord = env
+            .storage()
+            .instance()
+            .get(&key)
+            .ok_or(MuxAccountError::Unauthorized)?;
+        record.revoked = true;
+        env.storage().instance().set(&key, &record);
+        Self::extend_ttl(&env);
+        Ok(())
     }
 
     /// Execute a transaction payload on behalf of the account using a delegated session key.
@@ -425,11 +525,26 @@ impl MuxAccount {
         session_key: Address,
         payload: Bytes,
     ) -> Result<Bytes, MuxAccountError> {
-        // TODO: Validate that session_key is authorized for this account.
-        // This requires the session registry contract to be implemented.
-        // session_key.require_auth();
+        Self::require_not_paused(&env)?;
+        session_key.require_auth();
+        let owner = Self::stored_owner(&env)?;
+        let record: SessionKeyRecord = env
+            .storage()
+            .instance()
+            .get(&DataKey::SessionKey(owner, session_key.clone()))
+            .ok_or(MuxAccountError::Unauthorized)?;
+        if record.revoked || env.ledger().timestamp() >= record.expires_at {
+            return Err(MuxAccountError::Unauthorized);
+        }
 
-        emit(&env, symbol_short!("ses_exe"), (session_key, payload));
+        emit(
+            &env,
+            symbol_short!("ses_exe"),
+            SessionExecutedEvent {
+                session_key,
+                payload_len: payload.len(),
+            },
+        );
         Self::extend_ttl(&env);
         Ok(Bytes::new(&env))
     }
@@ -455,13 +570,16 @@ impl MuxAccount {
     // ── Private helpers ────────────────────────────────────────────────────────
 
     fn require_owner(env: &Env) -> Result<(), MuxAccountError> {
-        let owner: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Owner)
-            .ok_or(MuxAccountError::NotInitialized)?;
+        let owner = Self::stored_owner(env)?;
         owner.require_auth();
         Ok(())
+    }
+
+    fn stored_owner(env: &Env) -> Result<Address, MuxAccountError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Owner)
+            .ok_or(MuxAccountError::NotInitialized)
     }
 
     fn require_not_paused(env: &Env) -> Result<(), MuxAccountError> {
@@ -476,8 +594,8 @@ impl MuxAccount {
         Ok(())
     }
 
-    fn is_delegate_expired(info: &DelegateInfo, current_ledger: u32) -> bool {
-        current_ledger >= info.expiry_ledger
+    fn is_delegate_expired(info: &DelegateInfo, now: u64) -> bool {
+        now >= info.expires_at
     }
 
     /// Extend instance-storage TTL on every write to prevent silent data loss (T-21).
@@ -514,6 +632,16 @@ mod tests {
         Env, FromVal, String, Vec,
     };
 
+    #[contract]
+    struct ExecuteTarget;
+
+    #[contractimpl]
+    impl ExecuteTarget {
+        pub fn ping() -> u32 {
+            7
+        }
+    }
+
     fn topic_action(
         env: &Env,
         events: &soroban_sdk::Vec<(
@@ -536,6 +664,65 @@ mod tests {
         (env, client, owner, contract_id)
     }
 
+    fn setup_without_auth() -> (Env, MuxAccountClient<'static>, Address) {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let owner = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Owner, &owner);
+            env.storage()
+                .instance()
+                .set(&DataKey::GuardianSet, &Vec::<Address>::new(&env));
+            env.storage().instance().set(
+                &DataKey::Delegates,
+                &Map::<Address, DelegateInfo>::new(&env),
+            );
+            env.storage().instance().set(&DataKey::Nonce, &0_u64);
+        });
+        let client = MuxAccountClient::new(&env, &contract_id);
+        (env, client, owner)
+    }
+
+    #[test]
+    fn test_owner_mutations_reject_missing_authorization() {
+        let (env, client, _owner) = setup_without_auth();
+        let delegate = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let metadata = RegistryMeta {
+            name: String::from_str(&env, "unauthorized"),
+            version: String::from_str(&env, "1.0.0"),
+            description: String::from_str(&env, ""),
+        };
+
+        assert!(client
+            .try_set_delegate(&delegate, &1000_u32, &true)
+            .is_err());
+        assert!(client
+            .try_set_spend_limit(&asset, &100_i128, &10_u32)
+            .is_err());
+        assert!(client.try_unpause().is_err());
+        assert!(client.try_set_metadata(&metadata).is_err());
+
+        assert_eq!(client.delegates().len(), 0);
+        assert!(client.get_metadata().is_none());
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_initialize_rejects_missing_owner_authorization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let client = MuxAccountClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+
+        assert!(client.try_initialize(&owner, &Vec::new(&env)).is_err());
+        assert_eq!(
+            client.try_owner(),
+            Err(Ok(MuxAccountError::NotInitialized))
+        );
+        assert_eq!(env.events().all().len(), 0);
+    }
+
     #[test]
     fn test_initialize_emits_event() {
         let (env, client, owner, _cid) = setup();
@@ -551,7 +738,7 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
         let events = env.events().all();
         // init + dlg_set
         assert_eq!(events.len(), 2);
@@ -563,7 +750,7 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &false);
+        client.set_delegate(&delegate, &1000_u64, &false);
         client.remove_delegate(&delegate);
         let events = env.events().all();
         // init + dlg_set + dlg_rm
@@ -592,10 +779,10 @@ mod tests {
 
         // Fill up to the cap
         for _ in 0..64 {
-            client.set_delegate(&Address::generate(&env), &1000_u32, &false);
+            client.set_delegate(&Address::generate(&env), &1000_u64, &false);
         }
         // One more new delegate must be rejected
-        let result = client.try_set_delegate(&Address::generate(&env), &1000_u32, &false);
+        let result = client.try_set_delegate(&Address::generate(&env), &1000_u64, &false);
         assert!(result.is_err());
     }
 
@@ -606,12 +793,30 @@ mod tests {
 
         // Fill to cap
         let first = Address::generate(&env);
-        client.set_delegate(&first, &1000_u32, &false);
+        client.set_delegate(&first, &1000_u64, &false);
         for _ in 1..64 {
-            client.set_delegate(&Address::generate(&env), &1000_u32, &false);
+            client.set_delegate(&Address::generate(&env), &1000_u64, &false);
         }
         // Updating an existing delegate must still succeed even at cap
-        assert!(client.try_set_delegate(&first, &2000_u32, &true).is_ok());
+        assert!(client.try_set_delegate(&first, &2000_u64, &true).is_ok());
+    }
+
+    #[test]
+    fn test_delegate_cap_reclaims_expired_entries() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let expiry = env.ledger().sequence() + 1;
+        for _ in 0..64 {
+            client.set_delegate(&Address::generate(&env), &expiry, &false);
+        }
+
+        env.ledger().set_sequence_number(expiry);
+        let replacement = Address::generate(&env);
+        assert!(client
+            .try_set_delegate(&replacement, &(expiry + 100), &true)
+            .is_ok());
+        assert_eq!(client.delegates().len(), 1);
+        assert!(client.delegates().contains_key(replacement));
     }
 
     #[test]
@@ -637,10 +842,7 @@ mod tests {
         let guardians: Vec<Address> = Vec::new(&env);
         client.initialize(&owner, &guardians);
         let result = client.try_initialize(&owner, &guardians);
-        assert_eq!(
-            result,
-            Err(Ok(MuxAccountError::AlreadyInitialized))
-        );
+        assert_eq!(result, Err(Ok(MuxAccountError::AlreadyInitialized)));
     }
 
     #[test]
@@ -650,10 +852,7 @@ mod tests {
         client.initialize(&owner, &guardians);
         let other_owner = Address::generate(&env);
         let result = client.try_initialize(&other_owner, &guardians);
-        assert_eq!(
-            result,
-            Err(Ok(MuxAccountError::AlreadyInitialized))
-        );
+        assert_eq!(result, Err(Ok(MuxAccountError::AlreadyInitialized)));
     }
 
     #[test]
@@ -670,10 +869,7 @@ mod tests {
         // Second init with different guardians still fails with AlreadyInitialized.
         let new_guardians = soroban_sdk::vec![&env, Address::generate(&env)];
         let result = client.try_initialize(&owner, &new_guardians);
-        assert_eq!(
-            result,
-            Err(Ok(MuxAccountError::AlreadyInitialized))
-        );
+        assert_eq!(result, Err(Ok(MuxAccountError::AlreadyInitialized)));
     }
 
     #[test]
@@ -683,7 +879,7 @@ mod tests {
         client.initialize(&owner, &guardians);
 
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
 
         let delegates = client.delegates();
         assert!(delegates.contains_key(delegate.clone()));
@@ -698,12 +894,12 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
 
         let info = client.get_delegate(&delegate);
         assert_eq!(info.address, delegate);
         assert!(info.can_spend);
-        assert_eq!(info.expiry_ledger, 1000_u32);
+        assert_eq!(info.expires_at, 1000_u64);
     }
 
     #[test]
@@ -721,10 +917,10 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        let current = env.ledger().sequence();
+        let current = env.ledger().timestamp();
         let expiry = current + 1;
         client.set_delegate(&delegate, &expiry, &true);
-        env.ledger().set_sequence_number(expiry);
+        env.ledger().set_timestamp(expiry);
 
         let result = client.try_get_delegate(&delegate);
         assert!(result.is_err());
@@ -735,10 +931,10 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        let current = env.ledger().sequence();
+        let current = env.ledger().timestamp();
         let expiry = current + 1;
         client.set_delegate(&delegate, &expiry, &true);
-        env.ledger().set_sequence_number(expiry);
+        env.ledger().set_timestamp(expiry);
 
         let active = client.delegates();
         assert!(!active.contains_key(delegate));
@@ -759,6 +955,53 @@ mod tests {
         // Debit exceeding limit fails
         let result = client.try_debit_spend(&asset, &600_i128);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_enforces_spend_limit_before_invocation() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &100_i128, &100_u32);
+        let target = env.register_contract(None, ExecuteTarget);
+        let args = Vec::new(&env);
+
+        let value = client.execute(
+            &target,
+            &symbol_short!("ping"),
+            &args,
+            &asset,
+            &40_i128,
+        );
+        assert_eq!(u32::from_val(&env, &value), 7);
+        assert_eq!(
+            client.try_execute(
+                &target,
+                &symbol_short!("ping"),
+                &args,
+                &asset,
+                &70_i128,
+            ),
+            Err(Ok(MuxAccountError::SpendLimitExceeded))
+        );
+    }
+
+    #[test]
+    fn test_execute_rejects_non_positive_spend() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &100_i128, &100_u32);
+        assert_eq!(
+            client.try_execute(
+                &Address::generate(&env),
+                &symbol_short!("ping"),
+                &Vec::new(&env),
+                &asset,
+                &0_i128,
+            ),
+            Err(Ok(MuxAccountError::InvalidAmount))
+        );
     }
 
     #[test]
@@ -791,6 +1034,11 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let session_key = Address::generate(&env);
+        client.register_session_key(
+            &session_key,
+            &(env.ledger().timestamp() + 60),
+            &Vec::new(&env),
+        );
         let payload = Bytes::new(&env);
         let _ = client.execute_with_session(&session_key, &payload);
         let events = env.events().all();
@@ -799,6 +1047,35 @@ mod tests {
         assert_eq!(
             topic_action(&env, &events, events.len() - 1),
             symbol_short!("ses_exe")
+        );
+    }
+
+    #[test]
+    fn test_execute_with_session_rejects_unknown_revoked_and_expired_keys() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let session_key = Address::generate(&env);
+        let payload = Bytes::new(&env);
+        assert_eq!(
+            client.try_execute_with_session(&session_key, &payload),
+            Err(Ok(MuxAccountError::Unauthorized))
+        );
+
+        client.register_session_key(
+            &session_key,
+            &(env.ledger().timestamp() + 60),
+            &Vec::new(&env),
+        );
+        client.revoke_session_key(&session_key);
+        assert_eq!(
+            client.try_execute_with_session(&session_key, &payload),
+            Err(Ok(MuxAccountError::Unauthorized))
+        );
+
+        client.register_session_key(&session_key, &env.ledger().timestamp(), &Vec::new(&env));
+        assert_eq!(
+            client.try_execute_with_session(&session_key, &payload),
+            Err(Ok(MuxAccountError::Unauthorized))
         );
     }
 
@@ -893,9 +1170,7 @@ mod tests {
 
     /// Helper: read the instance TTL remaining via `as_contract`.
     fn instance_ttl(env: &Env, contract_id: &soroban_sdk::Address) -> u32 {
-        env.as_contract(contract_id, || {
-            env.storage().instance().get_ttl()
-        })
+        env.as_contract(contract_id, || env.storage().instance().get_ttl())
     }
 
     #[test]
@@ -905,10 +1180,13 @@ mod tests {
         let ttl_before = instance_ttl(&env, &cid);
 
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after set_delegate");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after set_delegate"
+        );
     }
 
     #[test]
@@ -917,13 +1195,16 @@ mod tests {
         client.initialize(&owner, &Vec::new(&env));
 
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &false);
+        client.set_delegate(&delegate, &1000_u64, &false);
         let ttl_before = instance_ttl(&env, &cid);
 
         client.remove_delegate(&delegate);
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after remove_delegate");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after remove_delegate"
+        );
     }
 
     #[test]
@@ -936,7 +1217,10 @@ mod tests {
         client.set_spend_limit(&asset, &1000_i128, &100_u32);
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after set_spend_limit");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after set_spend_limit"
+        );
     }
 
     #[test]
@@ -951,7 +1235,10 @@ mod tests {
         client.try_debit_spend(&asset, &200_i128).unwrap();
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after debit_spend");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after debit_spend"
+        );
     }
 
     #[test]
@@ -963,7 +1250,10 @@ mod tests {
         client.unpause();
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after unpause");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after unpause"
+        );
     }
 
     #[test]
@@ -973,11 +1263,19 @@ mod tests {
         let ttl_before = instance_ttl(&env, &cid);
 
         let session_key = Address::generate(&env);
+        client.register_session_key(
+            &session_key,
+            &(env.ledger().timestamp() + 60),
+            &Vec::new(&env),
+        );
         let payload = Bytes::new(&env);
         let _ = client.execute_with_session(&session_key, &payload);
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after execute_with_session");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after execute_with_session"
+        );
     }
 
     #[test]
@@ -994,7 +1292,10 @@ mod tests {
         client.set_metadata(&meta);
 
         let ttl_after = instance_ttl(&env, &cid);
-        assert!(ttl_after >= ttl_before, "TTL must not decrease after set_metadata");
+        assert!(
+            ttl_after >= ttl_before,
+            "TTL must not decrease after set_metadata"
+        );
     }
 
     // ── symbol_short length audit (#496) ─────────────────────────────────────

@@ -36,11 +36,11 @@ Contract tag: `mux_acct`
 |---|---|---|
 | `init` | `initialize` succeeds | `owner: Address` |
 | `unpaused` | `unpause` succeeds | `()` |
-| `dlg_set` | `set_delegate` succeeds | `(delegate: Address, expiry_ledger: u32, can_spend: bool)` |
+| `dlg_set` | `set_delegate` succeeds | `(delegate: Address, expires_at: u64, can_spend: bool)` |
 | `dlg_rm` | `remove_delegate` succeeds | `delegate: Address` |
 | `lmt_set` | `set_spend_limit` succeeds | `(asset: Address, amount: i128, period_ledgers: u32)` |
 | `debited` | `debit_spend` succeeds | `(asset: Address, spend: i128)` |
-| `ses_exe` | `execute_with_session` succeeds | `(session_key: Address, payload: Bytes)` |
+| `ses_exe` | `execute_with_session` succeeds | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` |
 
 ---
 

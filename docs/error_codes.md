@@ -12,7 +12,7 @@ Errors are defined in `MuxAccountError` (`contracts/mux-account/src/lib.rs`).
 | `AlreadyInitialized` | 2 | 409 | `initialize` called more than once |
 | `Unauthorized` | 3 | 401 | Caller is not the owner or contract is paused |
 | `DelegateNotFound` | 4 | 404 | Delegate does not exist in the delegate map |
-| `DelegateExpired` | 5 | 400 | Delegate has expired (current ledger >= `expiry_ledger`) |
+| `DelegateExpired` | 5 | 400 | Delegate has expired (ledger timestamp >= `expires_at`) |
 | `SpendLimitExceeded` | 6 | 400 | Spend would exceed the configured per-asset limit |
 | `InvalidAmount` | 7 | 400 | Spend limit amount is zero or negative |
 | `InvalidPeriod` | 8 | 400 | Spend limit period is zero |

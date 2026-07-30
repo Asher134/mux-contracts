@@ -1098,6 +1098,191 @@ mod tests {
         let _ = client.try_submit_batch(&ops);
     }
 
+    // ── Issue #412: batch size upper bound enforcement ────────────────────────
+    //
+    // These tests explicitly verify that MAX_BATCH_SIZE = 50 is enforced on
+    // every public entry point that accepts an ops vec.  They are separate from
+    // the general boundary tests above so the enforcement contract is
+    // unambiguously covered and easy to locate in the audit trail.
+
+    /// MAX_BATCH_SIZE must equal 50 — this is the stable on-chain constant that
+    /// callers and documentation depend on.
+    #[test]
+    fn test_max_batch_size_constant_is_50() {
+        assert_eq!(
+            MAX_BATCH_SIZE, 50,
+            "MAX_BATCH_SIZE must remain 50; update docs/batching-limits.md if changed"
+        );
+    }
+
+    /// execute_batch with exactly MAX_BATCH_SIZE ops must succeed (boundary-at-limit).
+    #[test]
+    fn test_execute_batch_exactly_at_max_size_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE);
+        // All ops have require_success=false so missing targets count as failures
+        // but do not abort — we only need the size check to pass.
+        assert!(
+            client.try_execute_batch(&caller, &ops).is_ok(),
+            "execute_batch must accept exactly MAX_BATCH_SIZE ops"
+        );
+    }
+
+    /// execute_batch with MAX_BATCH_SIZE + 1 ops must return BatchTooLarge.
+    #[test]
+    fn test_execute_batch_one_over_max_returns_batch_too_large() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let result = client.try_execute_batch(&caller, &ops);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(MuxBatcherError::BatchTooLarge),
+            "execute_batch with MAX_BATCH_SIZE+1 ops must return BatchTooLarge"
+        );
+    }
+
+    /// submit_batch with exactly MAX_BATCH_SIZE ops must succeed.
+    #[test]
+    fn test_submit_batch_exactly_at_max_size_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE);
+        assert!(
+            client.try_submit_batch(&ops).is_ok(),
+            "submit_batch must accept exactly MAX_BATCH_SIZE ops"
+        );
+    }
+
+    /// submit_batch with MAX_BATCH_SIZE + 1 ops must return BatchTooLarge.
+    #[test]
+    fn test_submit_batch_one_over_max_returns_batch_too_large() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let result = client.try_submit_batch(&ops);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(MuxBatcherError::BatchTooLarge),
+            "submit_batch with MAX_BATCH_SIZE+1 ops must return BatchTooLarge"
+        );
+    }
+
+    /// simulate_batch with exactly MAX_BATCH_SIZE ops must succeed.
+    #[test]
+    fn test_simulate_batch_exactly_at_max_size_accepted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE);
+        let result = client.try_simulate_batch(&caller, &ops);
+        assert!(
+            result.is_ok(),
+            "simulate_batch must accept exactly MAX_BATCH_SIZE ops"
+        );
+        assert_eq!(result.unwrap().unwrap().success_count, MAX_BATCH_SIZE);
+    }
+
+    /// simulate_batch with MAX_BATCH_SIZE + 1 ops must return BatchTooLarge.
+    #[test]
+    fn test_simulate_batch_one_over_max_returns_batch_too_large() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let result = client.try_simulate_batch(&caller, &ops);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(MuxBatcherError::BatchTooLarge),
+            "simulate_batch with MAX_BATCH_SIZE+1 ops must return BatchTooLarge"
+        );
+    }
+
+    /// estimate_fees with exactly MAX_BATCH_SIZE must succeed and return the
+    /// correct fee without overflow.
+    #[test]
+    fn test_estimate_fees_exactly_at_max_size_accepted() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let expected = MAX_BATCH_SIZE.saturating_mul(FEE_PER_OP);
+        assert_eq!(
+            client.estimate_fees(&MAX_BATCH_SIZE),
+            expected,
+            "estimate_fees at MAX_BATCH_SIZE must return MAX_BATCH_SIZE * FEE_PER_OP"
+        );
+    }
+
+    /// estimate_fees with MAX_BATCH_SIZE + 1 must return BatchTooLarge.
+    #[test]
+    fn test_estimate_fees_one_over_max_returns_batch_too_large() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let result = client.try_estimate_fees(&(MAX_BATCH_SIZE + 1));
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(MuxBatcherError::BatchTooLarge),
+            "estimate_fees with MAX_BATCH_SIZE+1 must return BatchTooLarge"
+        );
+    }
+
+    /// BatchTooLarge (error code 2) is stable ABI — verify the discriminant.
+    #[test]
+    fn test_batch_too_large_error_code_is_2() {
+        assert_eq!(
+            MuxBatcherError::BatchTooLarge as u32,
+            2,
+            "BatchTooLarge must remain error code 2; coordinate changes with docs/error_codes.md"
+        );
+    }
+
+    /// max_batch_size() query entrypoint must match the compiled constant so
+    /// callers can discover the limit at runtime without hard-coding it.
+    #[test]
+    fn test_max_batch_size_query_matches_constant() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        assert_eq!(
+            client.max_batch_size(),
+            MAX_BATCH_SIZE,
+            "max_batch_size() must equal the compiled MAX_BATCH_SIZE constant"
+        );
+    }
+
+    /// Oversized batches must not emit any events (no partial side-effects).
+    #[test]
+    fn test_execute_batch_over_max_emits_no_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let ops = make_nop_ops(&env, MAX_BATCH_SIZE + 1);
+        let _ = client.try_execute_batch(&caller, &ops);
+        assert_eq!(
+            env.events().all().len(),
+            0,
+            "no events must be emitted when execute_batch rejects an oversized batch"
+        );
+    }
+
     // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]

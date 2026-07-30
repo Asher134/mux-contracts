@@ -22,37 +22,24 @@
  *
  * # Public Interface
  *
- * | Entrypoint                  | Auth   | Description                                                        |
- * |-----------------------------|--------|--------------------------------------------------------------------|
- * | `grant_delegate`            | Owner  | Grant a permission set to a delegate (replaces prior grant).       |
- * | `revoke_delegate`           | Owner  | Revoke all permissions for an `(owner, delegate)` pair.            |
- * | `get_delegate_permissions`  | None   | Return the `Vec<Symbol>` of permissions granted to a delegate.     |
- * | `is_delegate`               | None   | Return `true` if owner has granted a specific permission to delegate. |
- * | `get_delegates`             | None   | Return all delegate addresses registered under an owner.           |
- * | `check_delegate`            | None   | `Ok(())` if permission granted, `Err(NotADelegate)` otherwise.     |
- *
- * # Audit Events
- *
- * Contract tag: `mux_dlg`
- *
- * | Action      | Trigger           | Data payload                       |
- * |-------------|-------------------|------------------------------------|
- * | `dlg_grant` | `grant_delegate`  | `(owner: Address, delegate: Address)` |
- * | `dlg_rev`   | `revoke_delegate` | `(owner: Address, delegate: Address)` |
- *
- * Events are emitted only on success. See [`docs/audit-events.md`] for the
- * full event schema and RPC filter examples.
+ * | Entrypoint                  | Description                                                   |
+ * |-----------------------------|---------------------------------------------------------------|
+ * | `grant_delegate`            | Grant a set of permissions from owner to delegate (owner auth required). |
+ * | `revoke_delegate`           | Revoke all permissions for an (owner, delegate) pair (owner auth required). |
+ * | `get_delegate_permissions`  | Return the `Vec<Symbol>` of permissions granted to a delegate. |
+ * | `is_delegate`               | Return `true` if owner has granted a specific permission to delegate. |
+ * | `get_delegates`             | Return all delegate addresses registered under an owner.     |
+ * | `check_delegate`            | Read-only convenience check: `Ok(())` if permission is granted, `Err(NotADelegate)` otherwise. |
+ * | `link_contract_id`          | Store the on-chain address of this delegation contract in instance storage for registry discoverability (admin auth required). |
+ * | `get_contract_id`           | Return the linked contract address, or `None` if not yet set. |
  *
  * # Storage Layout
  *
- * | Key                              | Value          | TTL                         |
- * |----------------------------------|----------------|-----------------------------|
- * | `DelegatePerms(owner, delegate)` | `Vec<Symbol>`  | Persistent (per-entry bump) |
- * | `OwnerDelegates(owner)`          | `Vec<Address>` | Persistent (per-entry bump) |
- *
- * Per-entry TTLs are refreshed independently of the contract instance TTL
- * on every write (`extend_entry_ttl`). Threshold: 17,280 ledgers (~1 day);
- * extend-to: 518,400 ledgers (~30 days).
+ * | Key                              | Value          | TTL        |
+ * |----------------------------------|----------------|------------|
+ * | `DelegatePerms(owner, delegate)` | `Vec<Symbol>`  | Persistent |
+ * | `OwnerDelegates(owner)`          | `Vec<Address>` | Persistent |
+ * | `ContractId`                     | `Address`      | Instance   |
  *
  * # Bounds
  *
@@ -113,6 +100,9 @@ pub enum DataKey {
     DelegatePerms(Address, Address),
     /// Maps owner -> Vec<Address> of all delegates (for enumeration).
     OwnerDelegates(Address),
+    /// Stores the on-chain Address of this delegation contract instance
+    /// for registry discoverability (see `link_contract_id`).
+    ContractId,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -129,6 +119,8 @@ pub enum MuxDelegationError {
     EmptyPermissions = 6003,
     /// The owner already has 128 delegates registered (storage-griefing guard).
     TooManyDelegates = 6004,
+    /// A contract address has already been linked; `link_contract_id` is write-once.
+    ContractIdAlreadySet = 6005,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -292,6 +284,41 @@ impl MuxDelegation {
         } else {
             Err(MuxDelegationError::NotADelegate)
         }
+    }
+
+    /// Store the on-chain address of this delegation contract instance in
+    /// instance storage so off-chain indexers, the mux-registry, and
+    /// TypeScript clients can discover it without an external config file.
+    ///
+    /// Write-once: subsequent calls return `ContractIdAlreadySet` (error 6005).
+    /// `admin` must authorise the call to prevent an unauthenticated party from
+    /// overwriting the contract's own identity before the deployer can set it.
+    ///
+    /// Emits `dlg_link` on success.
+    ///
+    /// # Errors
+    /// - [`MuxDelegationError::ContractIdAlreadySet`] — already linked.
+    pub fn link_contract_id(
+        env: Env,
+        admin: Address,
+        contract_id: Address,
+    ) -> Result<(), MuxDelegationError> {
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::ContractId) {
+            return Err(MuxDelegationError::ContractIdAlreadySet);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractId, &contract_id);
+        Self::extend_ttl(&env);
+        emit(&env, symbol_short!("dlg_link"), (admin, contract_id));
+        Ok(())
+    }
+
+    /// Return the linked contract address, or `None` if `link_contract_id`
+    /// has not been called yet.
+    pub fn get_contract_id(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::ContractId)
     }
 
     fn extend_ttl(env: &Env) {
@@ -748,6 +775,7 @@ mod tests {
         let _mux_dlg = symbol_short!("mux_dlg");
         let _dlg_grant = symbol_short!("dlg_grant");
         let _dlg_rev = symbol_short!("dlg_rev");
+        let _dlg_link = symbol_short!("dlg_link");
     }
 
     // ── check_delegate ────────────────────────────────────────────────────────
@@ -898,5 +926,118 @@ mod tests {
             0,
             "get_delegate_permissions must return empty vec for unknown pair"
         );
+    }
+
+    // ── link_contract_id / get_contract_id (closes #411) ─────────────────────
+
+    /// Linking a contract address stores it and returns it via get_contract_id.
+    #[test]
+    fn test_link_contract_id_stores_address() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let contract_addr = Address::generate(&env);
+
+        assert!(client
+            .try_link_contract_id(&admin, &contract_addr)
+            .is_ok());
+        assert_eq!(client.get_contract_id(), Some(contract_addr));
+    }
+
+    /// Before link_contract_id is called, get_contract_id returns None.
+    #[test]
+    fn test_get_contract_id_returns_none_before_link() {
+        let (env, client) = setup();
+        let _ = env;
+        assert_eq!(client.get_contract_id(), None);
+    }
+
+    /// link_contract_id is write-once: a second call returns ContractIdAlreadySet.
+    #[test]
+    fn test_link_contract_id_is_write_once() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let contract_addr_a = Address::generate(&env);
+        let contract_addr_b = Address::generate(&env);
+
+        client.link_contract_id(&admin, &contract_addr_a);
+
+        let result = client.try_link_contract_id(&admin, &contract_addr_b);
+        assert_eq!(
+            result,
+            Err(Ok(MuxDelegationError::ContractIdAlreadySet)),
+            "second link_contract_id call must return ContractIdAlreadySet"
+        );
+
+        // Original value must remain intact.
+        assert_eq!(client.get_contract_id(), Some(contract_addr_a));
+    }
+
+    /// link_contract_id emits a dlg_link event on success.
+    #[test]
+    fn test_link_contract_id_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let contract_addr = Address::generate(&env);
+
+        client.link_contract_id(&admin, &contract_addr);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+        assert_eq!(topic_action(&env, &events, 0), symbol_short!("dlg_link"));
+    }
+
+    /// link_contract_id requires admin authorisation; unauthenticated calls
+    /// must be rejected without writing any state.
+    #[test]
+    fn test_link_contract_id_requires_admin_auth() {
+        // No mock_all_auths — require_auth must reject.
+        let env = Env::default();
+        let id = env.register_contract(None, MuxDelegation);
+        let client = MuxDelegationClient::new(&env, &id);
+
+        let admin = Address::generate(&env);
+        let contract_addr = Address::generate(&env);
+
+        let result = client.try_link_contract_id(&admin, &contract_addr);
+        assert!(
+            result.is_err(),
+            "link_contract_id must reject when admin auth is absent"
+        );
+
+        // Storage must remain empty.
+        assert_eq!(
+            client.get_contract_id(),
+            None,
+            "get_contract_id must return None after a rejected link attempt"
+        );
+    }
+
+    /// Error code 6005 is stable ABI for ContractIdAlreadySet.
+    #[test]
+    fn test_error_code_contract_id_already_set() {
+        assert_eq!(MuxDelegationError::ContractIdAlreadySet as u32, 6005);
+    }
+
+    /// Existing delegation operations are unaffected after a contract address
+    /// is linked — isolation check.
+    #[test]
+    fn test_link_contract_id_does_not_affect_delegation_state() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let perm = symbol_short!("read");
+        let contract_addr = Address::generate(&env);
+
+        // Grant a delegation first.
+        client.grant_delegate(&owner, &delegate, &vec![&env, perm.clone()]);
+        assert!(client.is_delegate(&owner, &delegate, &perm));
+
+        // Link the contract address.
+        client.link_contract_id(&admin, &contract_addr);
+
+        // Prior delegation must be unaffected.
+        assert!(client.is_delegate(&owner, &delegate, &perm));
+        assert_eq!(client.get_delegates(&owner).len(), 1);
     }
 }
