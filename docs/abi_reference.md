@@ -226,7 +226,7 @@ pub struct SessionKeyRecord {
 | `dlg_rm` | `delegate: Address` | Delegate removed |
 | `lmt_set` | `(asset: Address, amount: i128, period_ledgers: u32)` | Spend limit set |
 | `debited` | `(asset: Address, spend: i128)` | Spend debited |
-| `ses_exe` | `(session_key: Address, payload: Bytes)` | Session key execution |
+| `ses_exe` | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` | Session key execution without duplicating payload data |
 
 ### Errors
 
