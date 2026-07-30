@@ -174,7 +174,7 @@ pub struct SpendLimit {
 
 pub struct DelegateInfo {
     pub address: Address,
-    pub expiry_ledger: u32,
+    pub expires_at: u64,
     pub can_spend: bool,
 }
 
@@ -206,10 +206,11 @@ pub struct SessionKeyRecord {
 | `initialize` | `owner: Address, guardians: Vec<Address>` | `Result<(), MuxAccountError>` | Set owner and guardian set; can only be called once |
 | `unpause` | — | `Result<(), MuxAccountError>` | Unpause the contract; owner-only |
 | `is_paused` | — | `bool` | Return whether the contract is currently paused |
-| `set_delegate` | `delegate: Address, expiry_ledger: u32, can_spend: bool` | `Result<(), MuxAccountError>` | Add or update a delegate (max 64); owner-only |
+| `set_delegate` | `delegate: Address, expires_at: u64, can_spend: bool` | `Result<(), MuxAccountError>` | Add or update a delegate with a Unix timestamp expiry (max 64); owner-only |
 | `remove_delegate` | `delegate: Address` | `Result<(), MuxAccountError>` | Remove a delegate; owner-only |
 | `set_spend_limit` | `asset: Address, amount: i128, period_ledgers: u32` | `Result<(), MuxAccountError>` | Set per-asset spend limit; owner-only |
 | `debit_spend` | `asset: Address, spend: i128` | `Result<(), MuxAccountError>` | Check and debit a spend against the limit; contract-only |
+| `execute` | `target: Address, function: Symbol, args: Vec<Val>, asset: Address, spend: i128` | `Result<Val, MuxAccountError>` | Owner-authorized contract call with atomic on-chain spend-limit enforcement |
 | `owner` | — | `Result<Address, MuxAccountError>` | Return current owner |
 | `delegates` | — | `Result<Map<Address, DelegateInfo>, MuxAccountError>` | Return all active (non-expired) delegates |
 | `get_delegate` | `delegate: Address` | `Result<DelegateInfo, MuxAccountError>` | Return delegate info if currently active |
@@ -222,11 +223,11 @@ pub struct SessionKeyRecord {
 |---|---|---|
 | `init` | `owner: Address` | Contract initialized |
 | `unpaused` | `()` | Contract unpaused |
-| `dlg_set` | `(delegate: Address, expiry_ledger: u32, can_spend: bool)` | Delegate added or updated |
+| `dlg_set` | `(delegate: Address, expires_at: u64, can_spend: bool)` | Delegate added or updated |
 | `dlg_rm` | `delegate: Address` | Delegate removed |
 | `lmt_set` | `(asset: Address, amount: i128, period_ledgers: u32)` | Spend limit set |
 | `debited` | `(asset: Address, spend: i128)` | Spend debited |
-| `ses_exe` | `(session_key: Address, payload: Bytes)` | Session key execution |
+| `ses_exe` | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` | Session key execution without duplicating payload data |
 
 ### Errors
 

@@ -1,11 +1,18 @@
 /**
  * Unit tests for MuxDelegationClient binding shape, DelegationQueryFilters,
- * and error mapping.
+ * error mapping, and delegation event constants/parser.
  */
 
 import {
   MuxDelegationClient,
   DelegationQueryFilters,
+  DELEGATION_CONTRACT_TAG,
+  DELEGATION_GRANT_ACTION,
+  DELEGATION_REVOKE_ACTION,
+  parseDelegationEvent,
+  type DelegationEvent,
+  type DelegationGrantEvent,
+  type DelegationRevokeEvent,
 } from "../src/generated/mux-delegation";
 import { ERROR_HTTP_MAP } from "../src/errors";
 import { muxDelegationErrorMessage } from "../src/types";
@@ -178,5 +185,96 @@ describe("muxDelegationErrorMessage helper", () => {
 
   it("returns 'unknown error code' for code 0", () => {
     expect(muxDelegationErrorMessage(0)).toBe("unknown error code");
+  });
+});
+
+// ── Delegation event constants (closes #409) ──────────────────────────────────
+
+describe("Delegation event constants", () => {
+  it("DELEGATION_CONTRACT_TAG is 'mux_dlg'", () => {
+    expect(DELEGATION_CONTRACT_TAG).toBe("mux_dlg");
+  });
+
+  it("DELEGATION_CONTRACT_TAG has length <= 9 (symbol_short limit)", () => {
+    expect(DELEGATION_CONTRACT_TAG.length).toBeLessThanOrEqual(9);
+  });
+
+  it("DELEGATION_GRANT_ACTION is 'dlg_grant'", () => {
+    expect(DELEGATION_GRANT_ACTION).toBe("dlg_grant");
+  });
+
+  it("DELEGATION_GRANT_ACTION has length <= 9 (symbol_short limit)", () => {
+    expect(DELEGATION_GRANT_ACTION.length).toBeLessThanOrEqual(9);
+  });
+
+  it("DELEGATION_REVOKE_ACTION is 'dlg_rev'", () => {
+    expect(DELEGATION_REVOKE_ACTION).toBe("dlg_rev");
+  });
+
+  it("DELEGATION_REVOKE_ACTION has length <= 9 (symbol_short limit)", () => {
+    expect(DELEGATION_REVOKE_ACTION.length).toBeLessThanOrEqual(9);
+  });
+});
+
+// ── parseDelegationEvent (closes #409) ───────────────────────────────────────
+
+describe("parseDelegationEvent", () => {
+  const makeRaw = (tag: string, action: string, data: unknown[], ledger = 1000) => ({
+    topic: [tag, action],
+    value: data,
+    ledger,
+  });
+
+  it("parses a dlg_grant event into DelegationGrantEvent", () => {
+    const raw = makeRaw("mux_dlg", "dlg_grant", ["OWNER_ADDR", "DELEGATE_ADDR"], 42);
+    const event = parseDelegationEvent(raw);
+    expect(event).not.toBeNull();
+    expect(event!.action).toBe("dlg_grant");
+    expect((event as DelegationGrantEvent).owner).toBe("OWNER_ADDR");
+    expect((event as DelegationGrantEvent).delegate).toBe("DELEGATE_ADDR");
+    expect(event!.ledger).toBe(42);
+  });
+
+  it("parses a dlg_rev event into DelegationRevokeEvent", () => {
+    const raw = makeRaw("mux_dlg", "dlg_rev", ["OWNER_ADDR", "DELEGATE_ADDR"], 99);
+    const event = parseDelegationEvent(raw);
+    expect(event).not.toBeNull();
+    expect(event!.action).toBe("dlg_rev");
+    expect((event as DelegationRevokeEvent).owner).toBe("OWNER_ADDR");
+    expect((event as DelegationRevokeEvent).delegate).toBe("DELEGATE_ADDR");
+    expect(event!.ledger).toBe(99);
+  });
+
+  it("returns null for an event with the wrong contract tag", () => {
+    const raw = makeRaw("mux_acct", "dlg_grant", ["OWNER", "DELEGATE"]);
+    expect(parseDelegationEvent(raw)).toBeNull();
+  });
+
+  it("returns null for an unknown action under the correct tag", () => {
+    const raw = makeRaw("mux_dlg", "unknown_action", ["OWNER", "DELEGATE"]);
+    expect(parseDelegationEvent(raw)).toBeNull();
+  });
+
+  it("handles missing data gracefully by substituting 'unknown'", () => {
+    const raw = makeRaw("mux_dlg", "dlg_grant", [], 1);
+    const event = parseDelegationEvent(raw);
+    expect(event).not.toBeNull();
+    expect((event as DelegationGrantEvent).owner).toBe("unknown");
+    expect((event as DelegationGrantEvent).delegate).toBe("unknown");
+  });
+
+  it("filters a mixed event stream to only delegation events", () => {
+    const raws = [
+      makeRaw("mux_acct", "init", [], 1),
+      makeRaw("mux_dlg", "dlg_grant", ["O1", "D1"], 2),
+      makeRaw("mux_dlg", "dlg_rev", ["O2", "D2"], 3),
+      makeRaw("mux_fac", "deployed", [], 4),
+    ];
+    const events: DelegationEvent[] = raws
+      .map(parseDelegationEvent)
+      .filter((e): e is DelegationEvent => e !== null);
+    expect(events).toHaveLength(2);
+    expect(events[0].action).toBe("dlg_grant");
+    expect(events[1].action).toBe("dlg_rev");
   });
 });

@@ -6,6 +6,44 @@
  * can take control. The current owner may cancel a pending recovery at
  * any time during the timelock window.
  *
+ * # Recovery Lifecycle
+ *
+ * ```text
+ * guardian calls initiate_recovery()
+ *       │
+ *       ▼
+ *  ┌──────────┐
+ *  │ PENDING  │  ◄── owner can cancel_recovery() at any time
+ *  └──────────┘
+ *       │
+ *  RECOVERY_TIMELOCK ledgers elapse (~24 h)
+ *       │
+ *       ▼
+ *  guardian calls execute_recovery()
+ *       │
+ *       ▼
+ *  ┌──────────┐
+ *  │ EXECUTED │  ownership transferred to new_owner
+ *  └──────────┘
+ * ```
+ *
+ * # Public Constants
+ *
+ * | Constant            | Value   | Ledgers | Approx duration (5 s/ledger) |
+ * |---------------------|---------|---------|------------------------------|
+ * | [`RECOVERY_TIMELOCK`] | 17 280 | delay   | ~24 hours                    |
+ * | [`RECOVERY_EXPIRY`]   | 120 960| window  | ~7 days                      |
+ *
+ * These constants are **stable ABI** — changing them is a breaking change
+ * for off-chain tooling that computes deadlines from `rec_init` event data.
+ * Coordinate with a registry version bump.
+ *
+ * Both constants are re-exported in the TypeScript bindings via
+ * `bindings/src/types.ts` as [`RECOVERY_TIMELOCK_LEDGERS`] and
+ * [`RECOVERY_EXPIRY_LEDGERS`] so TypeScript clients can compute
+ * `executableAt` and `expiresAt` from the `initiatedAt` ledger without
+ * an extra RPC call.
+ *
  * # Registry link
  *
  * An optional registry contract address can be associated with this
@@ -17,6 +55,26 @@
  *
  * This crate is `#![no_std]` and does not use `extern crate alloc`.
  * All data structures use Soroban SDK types backed by the Soroban host.
+ *
+ * # Audit Events
+ *
+ * Contract tag: `mux_recv`
+ *
+ * | Action     | Trigger             | Data payload                                                   |
+ * |------------|---------------------|----------------------------------------------------------------|
+ * | `init`     | `initialize`        | `owner: Address`                                               |
+ * | `rec_init` | `initiate_recovery` | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
+ * | `rec_exec` | `execute_recovery`  | `(guardian: Address, new_owner: Address)`                      |
+ * | `rec_cncl` | `cancel_recovery`   | `()`                                                           |
+ * | `grd_add`  | `add_guardian`      | `(owner: Address, guardian: Address)`                          |
+ * | `grd_rm`   | `remove_guardian`   | `(owner: Address, guardian: Address)`                          |
+ * | `reg_link` | `set_registry`      | `registry_id: Address`                                         |
+ *
+ * See [`docs/recovery-trust-model.md`] and [`docs/audit-events.md`] for
+ * full security model and event schema reference.
+ *
+ * [`docs/recovery-trust-model.md`]: ../../docs/recovery-trust-model.md
+ * [`docs/audit-events.md`]: ../../docs/audit-events.md
  */
 
 #![no_std]
@@ -41,18 +99,45 @@ fn emit(
 /// `execute_recovery`.
 ///
 /// At ~5-second ledger close times:
-///   17_280 ledgers ≈ 24 hours
+///   17_280 ledgers × 5 s = 86_400 s = **24 hours**
 ///
-/// This gives the legitimate owner a window to cancel a fraudulent recovery
-/// before it can be executed.
+/// This window gives the legitimate owner time to observe the `rec_init`
+/// on-chain event and call `cancel_recovery` before a fraudulent execution
+/// can proceed.
+///
+/// # Stable ABI
+///
+/// This value is encoded in `rec_init` event payloads as `executable_at =
+/// initiated_at + RECOVERY_TIMELOCK`. Off-chain indexers and TypeScript
+/// clients use it to compute deadlines without a storage read. Changing
+/// this constant is a **breaking change** for any tooling that derives
+/// deadlines from event data — coordinate with a registry version bump and
+/// update `bindings/src/types.ts` (`RECOVERY_TIMELOCK_LEDGERS`).
+///
+/// # TypeScript binding
+///
+/// Re-exported as `RECOVERY_TIMELOCK_LEDGERS` in `bindings/src/types.ts`.
 pub const RECOVERY_TIMELOCK: u32 = 17_280;
 
 /// Maximum number of ledgers after initiation during which a recovery
-/// can be executed. After this window, the request auto-expires and a
-/// new recovery must be initiated.
+/// can be executed. After this window the request is considered expired
+/// and a new recovery must be initiated.
 ///
 /// At ~5-second ledger close times:
-///   120_960 ledgers ≈ 7 days
+///   120_960 ledgers × 5 s = 604_800 s = **7 days**
+///
+/// An expired `Pending` request does **not** block a new `initiate_recovery`
+/// call — the stale request is overwritten.
+///
+/// # Stable ABI
+///
+/// Like [`RECOVERY_TIMELOCK`], this value is encoded in `rec_init` event
+/// payloads as `expires_at = initiated_at + RECOVERY_EXPIRY`. Changing it
+/// is a breaking change.
+///
+/// # TypeScript binding
+///
+/// Re-exported as `RECOVERY_EXPIRY_LEDGERS` in `bindings/src/types.ts`.
 pub const RECOVERY_EXPIRY: u32 = 120_960;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
