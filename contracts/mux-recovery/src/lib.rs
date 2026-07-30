@@ -143,16 +143,46 @@ pub const RECOVERY_EXPIRY: u32 = 120_960;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 /// Lifecycle state of a recovery request.
+///
+/// State transitions:
+///
+/// ```text
+///   None ──► Pending ──► Executed   (guardian executes after RECOVERY_TIMELOCK)
+///                 └────► Cancelled  (owner cancels at any time)
+/// ```
+///
+/// `Executed` and `Cancelled` are **terminal** states — no further transitions
+/// occur from them. A new recovery request may be initiated after:
+/// - A prior request is `Cancelled` (by the owner), or
+/// - A prior `Pending` request reaches `expires_at` without execution
+///   (treated as stale; overwritten by the next `initiate_recovery` call).
+///
+/// # ABI Stability
+///
+/// Variant names and their relative ordinal positions are on-chain ABI.
+/// The TypeScript binding re-exports this as the `RecoveryStatus` enum in
+/// `bindings/src/generated/mux-recovery.ts`.
+///
+/// # Variants
+///
+/// - [`RecoveryStatus::None`] — no active recovery request.
+/// - [`RecoveryStatus::Pending`] — recovery initiated, timelock has not elapsed.
+/// - [`RecoveryStatus::Executed`] — recovery executed, ownership transferred.
+/// - [`RecoveryStatus::Cancelled`] — recovery cancelled by the owner.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryStatus {
-    /// No active recovery request.
+    /// No active recovery request. Default state after initialization.
     None,
-    /// A recovery has been initiated but the timelock has not expired.
+    /// A recovery has been initiated but [`RECOVERY_TIMELOCK`] ledgers have
+    /// not yet elapsed. The current owner may call `cancel_recovery` at any
+    /// time to abort.
     Pending,
-    /// The recovery was executed and ownership transferred.
+    /// The recovery was executed after the timelock: ownership has been
+    /// transferred to the `new_owner` specified at initiation. Terminal state.
     Executed,
-    /// The recovery was cancelled by the current owner.
+    /// The recovery was cancelled by the current owner before execution.
+    /// Terminal state. A new recovery may be initiated after cancellation.
     Cancelled,
 }
 

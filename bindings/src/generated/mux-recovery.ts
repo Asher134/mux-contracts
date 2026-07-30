@@ -5,6 +5,40 @@
  *
  * Provides a client for the MuxRecovery contract with optional filtering
  * query parameters on read methods.
+ *
+ * ## RecoveryStatus Enum
+ *
+ * `RecoveryStatus` mirrors the on-chain `RecoveryStatus` Soroban enum and
+ * describes the lifecycle state of an account recovery request:
+ *
+ * ```
+ *   None ──► Pending ──► Executed   (guardian executes after timelock)
+ *                 └────► Cancelled  (owner cancels)
+ * ```
+ *
+ * Transitions:
+ * - `None → Pending`:     `initiate_recovery()` called by a registered guardian.
+ * - `Pending → Executed`: `execute_recovery()` called after `RECOVERY_TIMELOCK` ledgers elapse.
+ * - `Pending → Cancelled`: `cancel_recovery()` called by the owner at any time.
+ * - `Executed` and `Cancelled` are terminal states — no further transitions.
+ *   (A new request can be initiated after cancellation or expiry.)
+ *
+ * ## Audit Events
+ *
+ * Contract tag: `mux_recv`
+ *
+ * | Action     | topics[1]   | Trigger             | Status transition   |
+ * |------------|-------------|---------------------|---------------------|
+ * | `init`     | `init`      | `initialize`        | —                   |
+ * | `rec_init` | `rec_init`  | `initiate_recovery` | None → Pending      |
+ * | `rec_exec` | `rec_exec`  | `execute_recovery`  | Pending → Executed  |
+ * | `rec_cncl` | `rec_cncl`  | `cancel_recovery`   | Pending → Cancelled |
+ *
+ * The `rec_init` event carries `(guardian, new_owner, initiated_at,
+ * executable_at, expires_at)` so off-chain watchers can surface deadlines
+ * without a follow-up RPC call.
+ *
+ * See `docs/recovery-trust-model.md` for the full security model.
  */
 
 import {
@@ -22,12 +56,99 @@ import { pollTransaction } from "../horizon";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/** Mirrors the on-chain RecoveryStatus enum. */
+/**
+ * Lifecycle state of a recovery request. Mirrors the on-chain
+ * `RecoveryStatus` Soroban enum in `contracts/mux-recovery/src/lib.rs`.
+ *
+ * State machine:
+ * ```
+ *   None ──► Pending ──► Executed   (guardian executes after RECOVERY_TIMELOCK)
+ *                 └────► Cancelled  (owner cancels at any time)
+ * ```
+ *
+ * `Executed` and `Cancelled` are **terminal** — no further state transitions
+ * occur. A new recovery request can be initiated after `Cancelled` or after
+ * an expired (but un-executed) `Pending` request.
+ *
+ * Use {@link recoveryStatusFromString} to parse the raw string returned by
+ * `scValToNative`. Use {@link isTerminalRecoveryStatus} to check finality.
+ *
+ * Re-exported from the main package index as:
+ * ```ts
+ * import { RecoveryStatus } from "@mux-protocol/contracts";
+ * ```
+ */
 export enum RecoveryStatus {
+  /** No active recovery request. Default state after initialization. */
   None = "None",
+  /**
+   * A recovery has been initiated but `RECOVERY_TIMELOCK` ledgers have not
+   * yet elapsed. The owner may call `cancel_recovery` to abort.
+   */
   Pending = "Pending",
+  /**
+   * The recovery was executed after the timelock: ownership has been
+   * transferred to the `new_owner` specified at initiation. Terminal state.
+   */
   Executed = "Executed",
+  /**
+   * The recovery was cancelled by the current owner before execution.
+   * Terminal state — a new recovery can be initiated after cancellation.
+   */
   Cancelled = "Cancelled",
+}
+
+/**
+ * Parse a raw string value from a Soroban RPC response into a typed
+ * {@link RecoveryStatus} variant.
+ *
+ * `scValToNative` converts the on-chain `RecoveryStatus` enum to a plain
+ * string (e.g. `"Pending"`). Use this helper to convert it safely.
+ *
+ * Throws if the value is not a recognised variant.
+ *
+ * @example
+ * ```ts
+ * import { recoveryStatusFromString, RecoveryStatus } from "@mux-protocol/contracts";
+ *
+ * const raw = "Pending"; // from scValToNative(retval)
+ * const status = recoveryStatusFromString(raw);
+ * if (status === RecoveryStatus.Pending) {
+ *   console.log("Recovery is in progress");
+ * }
+ * ```
+ */
+export function recoveryStatusFromString(raw: string): RecoveryStatus {
+  switch (raw) {
+    case "None":      return RecoveryStatus.None;
+    case "Pending":   return RecoveryStatus.Pending;
+    case "Executed":  return RecoveryStatus.Executed;
+    case "Cancelled": return RecoveryStatus.Cancelled;
+    default:
+      throw new Error(`Unknown RecoveryStatus value: "${raw}"`);
+  }
+}
+
+/**
+ * Return true if a recovery is in a terminal state (Executed or Cancelled)
+ * and cannot advance further.
+ *
+ * @example
+ * ```ts
+ * if (isTerminalRecoveryStatus(status)) {
+ *   console.log("No active recovery — a new one can be initiated.");
+ * }
+ * ```
+ */
+export function isTerminalRecoveryStatus(status: RecoveryStatus): boolean {
+  return status === RecoveryStatus.Executed || status === RecoveryStatus.Cancelled;
+}
+
+/**
+ * Return true if a recovery can be cancelled (only when Pending).
+ */
+export function isCancellableRecoveryStatus(status: RecoveryStatus): boolean {
+  return status === RecoveryStatus.Pending;
 }
 
 /** Mirrors the on-chain RecoveryRequest struct. */

@@ -24,8 +24,8 @@ describe("MuxDelegationClient shape — permissions map (closes #407)", () => {
     expect(typeof MuxDelegationClient.prototype.getDelegatePermissions).toBe("function");
   });
 
-  it("getDelegatePermissions accepts sourceKeypair, owner, delegate (arity 3)", () => {
-    expect(MuxDelegationClient.prototype.getDelegatePermissions.length).toBe(3);
+  it("getDelegatePermissions accepts sourceKeypair, owner, delegate, and optional filters (arity 4)", () => {
+    expect(MuxDelegationClient.prototype.getDelegatePermissions.length).toBe(4);
   });
 
   it("exposes isDelegate as a function", () => {

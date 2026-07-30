@@ -7,6 +7,9 @@ import {
   MuxRecoveryClient,
   RecoveryQueryFilters,
   RecoveryStatus,
+  recoveryStatusFromString,
+  isTerminalRecoveryStatus,
+  isCancellableRecoveryStatus,
 } from "../src/generated/mux-recovery";
 import {
   RECOVERY_TIMELOCK_LEDGERS,
