@@ -233,6 +233,21 @@ impl MuxAccount {
             .get(&DataKey::Delegates)
             .ok_or(MuxAccountError::NotInitialized)?;
 
+        // Reclaim expired entries before applying the cap. This keeps storage
+        // bounded without allowing stale delegates to permanently exhaust it.
+        if !delegates.contains_key(delegate.clone()) {
+            let current_ledger = env.ledger().sequence();
+            let mut expired = Vec::new(&env);
+            for (address, info) in delegates.iter() {
+                if Self::is_delegate_expired(&info, current_ledger) {
+                    expired.push_back(address);
+                }
+            }
+            for address in expired.iter() {
+                delegates.remove(address);
+            }
+        }
+
         // STORAGE-GRIEFING: reject new entries beyond the cap; updates to existing
         // delegates are always allowed since they don't grow the map.
         if !delegates.contains_key(delegate.clone()) && delegates.len() >= MAX_DELEGATES {
@@ -689,6 +704,24 @@ mod tests {
         }
         // Updating an existing delegate must still succeed even at cap
         assert!(client.try_set_delegate(&first, &2000_u32, &true).is_ok());
+    }
+
+    #[test]
+    fn test_delegate_cap_reclaims_expired_entries() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let expiry = env.ledger().sequence() + 1;
+        for _ in 0..64 {
+            client.set_delegate(&Address::generate(&env), &expiry, &false);
+        }
+
+        env.ledger().set_sequence_number(expiry);
+        let replacement = Address::generate(&env);
+        assert!(client
+            .try_set_delegate(&replacement, &(expiry + 100), &true)
+            .is_ok());
+        assert_eq!(client.delegates().len(), 1);
+        assert!(client.delegates().contains_key(replacement));
     }
 
     #[test]
