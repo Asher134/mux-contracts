@@ -5,6 +5,39 @@
  *
  * Provides a client for the MuxDelegation contract with optional filtering
  * query parameters on read methods and a convenience `checkDelegate` method.
+ *
+ * ## Audit Events
+ *
+ * Every successful state mutation emits a Soroban contract event under the
+ * `mux_dlg` contract tag. Topic layout:
+ *
+ * ```
+ * topics[0]  "mux_dlg"   — contract tag (Symbol)
+ * topics[1]  <action>    — "dlg_grant" | "dlg_rev"
+ * data       (owner: Address, delegate: Address)
+ * ```
+ *
+ * Subscribe via Soroban RPC `getEvents`:
+ *
+ * ```ts
+ * import { DELEGATION_CONTRACT_TAG, DELEGATION_GRANT_ACTION, DELEGATION_REVOKE_ACTION } from "./mux-delegation";
+ *
+ * const rawEvents = await server.getEvents({
+ *   startLedger,
+ *   filters: [{
+ *     type: "contract",
+ *     contractIds: [DELEGATION_CONTRACT_ID],
+ *     topics: [[DELEGATION_CONTRACT_TAG]],
+ *   }],
+ * });
+ *
+ * for (const ev of rawEvents.records) {
+ *   const action = ev.topic[1]; // "dlg_grant" | "dlg_rev"
+ *   const [owner, delegate] = ev.value.obj?.map ?? [];
+ * }
+ * ```
+ *
+ * See `docs/audit-events.md` for the full event schema reference.
  */
 
 import {
@@ -21,7 +54,119 @@ import {
 import type { MuxDelegationError } from "../types";
 import { pollTransaction } from "../horizon";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Event constants ───────────────────────────────────────────────────────────
+
+/**
+ * Soroban contract tag for all `mux-delegation` events (`topics[0]`).
+ *
+ * Use this value in `getEvents` filter topics to subscribe to all delegation
+ * events from a specific contract instance.
+ *
+ * @example
+ * ```ts
+ * filters: [{ type: "contract", contractIds: [id], topics: [[DELEGATION_CONTRACT_TAG]] }]
+ * ```
+ */
+export const DELEGATION_CONTRACT_TAG = "mux_dlg" as const;
+
+/**
+ * Action symbol emitted by `grant_delegate` on success (`topics[1]`).
+ *
+ * Data payload: `(owner: Address, delegate: Address)`
+ */
+export const DELEGATION_GRANT_ACTION = "dlg_grant" as const;
+
+/**
+ * Action symbol emitted by `revoke_delegate` on success (`topics[1]`).
+ *
+ * Data payload: `(owner: Address, delegate: Address)`
+ */
+export const DELEGATION_REVOKE_ACTION = "dlg_rev" as const;
+
+// ── Event types ───────────────────────────────────────────────────────────────
+
+/**
+ * Parsed form of a `dlg_grant` event emitted by `grant_delegate`.
+ *
+ * The `owner` granted `permissions` to `delegate` at the emitting ledger.
+ * Note: the event data carries only `(owner, delegate)` — the permission
+ * list must be retrieved via `getDelegatePermissions` if needed.
+ */
+export interface DelegationGrantEvent {
+  action: typeof DELEGATION_GRANT_ACTION;
+  owner: string;
+  delegate: string;
+  /** Ledger sequence at which the event was emitted. */
+  ledger: number;
+}
+
+/**
+ * Parsed form of a `dlg_rev` event emitted by `revoke_delegate`.
+ *
+ * All permissions previously granted from `owner` to `delegate` have been
+ * removed.
+ */
+export interface DelegationRevokeEvent {
+  action: typeof DELEGATION_REVOKE_ACTION;
+  owner: string;
+  delegate: string;
+  /** Ledger sequence at which the event was emitted. */
+  ledger: number;
+}
+
+/** Union of all delegation event shapes. */
+export type DelegationEvent = DelegationGrantEvent | DelegationRevokeEvent;
+
+// ── Event parser ──────────────────────────────────────────────────────────────
+
+/**
+ * Parse a raw Soroban RPC event record into a typed {@link DelegationEvent}.
+ *
+ * Returns `null` if the event does not match the `mux_dlg` schema.
+ *
+ * @example
+ * ```ts
+ * import { parseDelegationEvent } from "@mux-protocol/contracts";
+ *
+ * const raw = await server.getEvents({ startLedger, filters: [...] });
+ * const events: DelegationEvent[] = raw.records
+ *   .map(parseDelegationEvent)
+ *   .filter((e): e is DelegationEvent => e !== null);
+ *
+ * const grants = events.filter(e => e.action === "dlg_grant");
+ * const revokes = events.filter(e => e.action === "dlg_rev");
+ * ```
+ */
+export function parseDelegationEvent(
+  // Accept the raw SorobanRpc event shape generically to avoid a hard SDK
+  // dependency at the type level — callers cast from the RPC response.
+  raw: {
+    topic: string[];
+    value: { map?: { key: string; val: unknown }[] } | unknown;
+    ledger: number;
+  }
+): DelegationEvent | null {
+  const [tag, action] = raw.topic;
+  if (tag !== DELEGATION_CONTRACT_TAG) return null;
+  if (action !== DELEGATION_GRANT_ACTION && action !== DELEGATION_REVOKE_ACTION) {
+    return null;
+  }
+
+  // Data payload is a tuple (owner: Address, delegate: Address).
+  // scValToNative converts this to a JS array of strings on the RPC result.
+  const data = raw.value as unknown[];
+  const owner = typeof data?.[0] === "string" ? data[0] : "unknown";
+  const delegate = typeof data?.[1] === "string" ? data[1] : "unknown";
+
+  return {
+    action: action as typeof DELEGATION_GRANT_ACTION | typeof DELEGATION_REVOKE_ACTION,
+    owner,
+    delegate,
+    ledger: raw.ledger,
+  } as DelegationEvent;
+}
+
+
 
 /**
  * Optional filter parameters for delegation read queries.
