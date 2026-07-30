@@ -664,6 +664,65 @@ mod tests {
         (env, client, owner, contract_id)
     }
 
+    fn setup_without_auth() -> (Env, MuxAccountClient<'static>, Address) {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let owner = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Owner, &owner);
+            env.storage()
+                .instance()
+                .set(&DataKey::GuardianSet, &Vec::<Address>::new(&env));
+            env.storage().instance().set(
+                &DataKey::Delegates,
+                &Map::<Address, DelegateInfo>::new(&env),
+            );
+            env.storage().instance().set(&DataKey::Nonce, &0_u64);
+        });
+        let client = MuxAccountClient::new(&env, &contract_id);
+        (env, client, owner)
+    }
+
+    #[test]
+    fn test_owner_mutations_reject_missing_authorization() {
+        let (env, client, _owner) = setup_without_auth();
+        let delegate = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let metadata = RegistryMeta {
+            name: String::from_str(&env, "unauthorized"),
+            version: String::from_str(&env, "1.0.0"),
+            description: String::from_str(&env, ""),
+        };
+
+        assert!(client
+            .try_set_delegate(&delegate, &1000_u32, &true)
+            .is_err());
+        assert!(client
+            .try_set_spend_limit(&asset, &100_i128, &10_u32)
+            .is_err());
+        assert!(client.try_unpause().is_err());
+        assert!(client.try_set_metadata(&metadata).is_err());
+
+        assert_eq!(client.delegates().len(), 0);
+        assert!(client.get_metadata().is_none());
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_initialize_rejects_missing_owner_authorization() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxAccount);
+        let client = MuxAccountClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+
+        assert!(client.try_initialize(&owner, &Vec::new(&env)).is_err());
+        assert_eq!(
+            client.try_owner(),
+            Err(Ok(MuxAccountError::NotInitialized))
+        );
+        assert_eq!(env.events().all().len(), 0);
+    }
+
     #[test]
     fn test_initialize_emits_event() {
         let (env, client, owner, _cid) = setup();
