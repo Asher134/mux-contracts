@@ -174,7 +174,7 @@ pub struct SpendLimit {
 
 pub struct DelegateInfo {
     pub address: Address,
-    pub expiry_ledger: u32,
+    pub expires_at: u64,
     pub can_spend: bool,
 }
 
@@ -206,7 +206,7 @@ pub struct SessionKeyRecord {
 | `initialize` | `owner: Address, guardians: Vec<Address>` | `Result<(), MuxAccountError>` | Set owner and guardian set; can only be called once |
 | `unpause` | — | `Result<(), MuxAccountError>` | Unpause the contract; owner-only |
 | `is_paused` | — | `bool` | Return whether the contract is currently paused |
-| `set_delegate` | `delegate: Address, expiry_ledger: u32, can_spend: bool` | `Result<(), MuxAccountError>` | Add or update a delegate (max 64); owner-only |
+| `set_delegate` | `delegate: Address, expires_at: u64, can_spend: bool` | `Result<(), MuxAccountError>` | Add or update a delegate with a Unix timestamp expiry (max 64); owner-only |
 | `remove_delegate` | `delegate: Address` | `Result<(), MuxAccountError>` | Remove a delegate; owner-only |
 | `set_spend_limit` | `asset: Address, amount: i128, period_ledgers: u32` | `Result<(), MuxAccountError>` | Set per-asset spend limit; owner-only |
 | `debit_spend` | `asset: Address, spend: i128` | `Result<(), MuxAccountError>` | Check and debit a spend against the limit; contract-only |
@@ -222,7 +222,7 @@ pub struct SessionKeyRecord {
 |---|---|---|
 | `init` | `owner: Address` | Contract initialized |
 | `unpaused` | `()` | Contract unpaused |
-| `dlg_set` | `(delegate: Address, expiry_ledger: u32, can_spend: bool)` | Delegate added or updated |
+| `dlg_set` | `(delegate: Address, expires_at: u64, can_spend: bool)` | Delegate added or updated |
 | `dlg_rm` | `delegate: Address` | Delegate removed |
 | `lmt_set` | `(asset: Address, amount: i128, period_ledgers: u32)` | Spend limit set |
 | `debited` | `(asset: Address, spend: i128)` | Spend debited |

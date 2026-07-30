@@ -20,7 +20,7 @@ client.initialize(&owner, &guardians);
 
 ```rust
 // Only the owner can add or update delegates.
-client.set_delegate(&delegate, &expiry_ledger, &can_spend);
+client.set_delegate(&delegate, &expires_at, &can_spend);
 // Internally: require_owner() → owner.require_auth()
 ```
 

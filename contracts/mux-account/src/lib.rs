@@ -100,7 +100,8 @@ pub struct SpendLimit {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DelegateInfo {
     pub address: Address,
-    pub expiry_ledger: u32,
+    /// Unix timestamp at which this delegation stops being valid.
+    pub expires_at: u64,
     pub can_spend: bool,
 }
 
@@ -222,7 +223,7 @@ impl MuxAccount {
     pub fn set_delegate(
         env: Env,
         delegate: Address,
-        expiry_ledger: u32,
+        expires_at: u64,
         can_spend: bool,
     ) -> Result<(), MuxAccountError> {
         Self::require_not_paused(&env)?;
@@ -257,7 +258,7 @@ impl MuxAccount {
             delegate.clone(),
             DelegateInfo {
                 address: delegate.clone(),
-                expiry_ledger,
+                expires_at,
                 can_spend,
             },
         );
@@ -267,7 +268,7 @@ impl MuxAccount {
         emit(
             &env,
             symbol_short!("dlg_set"),
-            (delegate, expiry_ledger, can_spend),
+            (delegate, expires_at, can_spend),
         );
         Self::extend_ttl(&env);
         Ok(())
@@ -395,7 +396,7 @@ impl MuxAccount {
             .ok_or(MuxAccountError::NotInitialized)?;
         let mut active_delegates: Map<Address, DelegateInfo> = Map::new(&env);
         for (delegate, info) in delegates.iter() {
-            if !Self::is_delegate_expired(&info, env.ledger().sequence()) {
+            if !Self::is_delegate_expired(&info, env.ledger().timestamp()) {
                 active_delegates.set(delegate, info);
             }
         }
@@ -412,7 +413,7 @@ impl MuxAccount {
         let info = delegates
             .get(delegate.clone())
             .ok_or(MuxAccountError::DelegateNotFound)?;
-        if Self::is_delegate_expired(&info, env.ledger().sequence()) {
+        if Self::is_delegate_expired(&info, env.ledger().timestamp()) {
             return Err(MuxAccountError::DelegateExpired);
         }
         Ok(info)
@@ -568,8 +569,8 @@ impl MuxAccount {
         Ok(())
     }
 
-    fn is_delegate_expired(info: &DelegateInfo, current_ledger: u32) -> bool {
-        current_ledger >= info.expiry_ledger
+    fn is_delegate_expired(info: &DelegateInfo, now: u64) -> bool {
+        now >= info.expires_at
     }
 
     /// Extend instance-storage TTL on every write to prevent silent data loss (T-21).
@@ -643,7 +644,7 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
         let events = env.events().all();
         // init + dlg_set
         assert_eq!(events.len(), 2);
@@ -655,7 +656,7 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &false);
+        client.set_delegate(&delegate, &1000_u64, &false);
         client.remove_delegate(&delegate);
         let events = env.events().all();
         // init + dlg_set + dlg_rm
@@ -684,10 +685,10 @@ mod tests {
 
         // Fill up to the cap
         for _ in 0..64 {
-            client.set_delegate(&Address::generate(&env), &1000_u32, &false);
+            client.set_delegate(&Address::generate(&env), &1000_u64, &false);
         }
         // One more new delegate must be rejected
-        let result = client.try_set_delegate(&Address::generate(&env), &1000_u32, &false);
+        let result = client.try_set_delegate(&Address::generate(&env), &1000_u64, &false);
         assert!(result.is_err());
     }
 
@@ -698,12 +699,12 @@ mod tests {
 
         // Fill to cap
         let first = Address::generate(&env);
-        client.set_delegate(&first, &1000_u32, &false);
+        client.set_delegate(&first, &1000_u64, &false);
         for _ in 1..64 {
-            client.set_delegate(&Address::generate(&env), &1000_u32, &false);
+            client.set_delegate(&Address::generate(&env), &1000_u64, &false);
         }
         // Updating an existing delegate must still succeed even at cap
-        assert!(client.try_set_delegate(&first, &2000_u32, &true).is_ok());
+        assert!(client.try_set_delegate(&first, &2000_u64, &true).is_ok());
     }
 
     #[test]
@@ -784,7 +785,7 @@ mod tests {
         client.initialize(&owner, &guardians);
 
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
 
         let delegates = client.delegates();
         assert!(delegates.contains_key(delegate.clone()));
@@ -799,12 +800,12 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
 
         let info = client.get_delegate(&delegate);
         assert_eq!(info.address, delegate);
         assert!(info.can_spend);
-        assert_eq!(info.expiry_ledger, 1000_u32);
+        assert_eq!(info.expires_at, 1000_u64);
     }
 
     #[test]
@@ -822,10 +823,10 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        let current = env.ledger().sequence();
+        let current = env.ledger().timestamp();
         let expiry = current + 1;
         client.set_delegate(&delegate, &expiry, &true);
-        env.ledger().set_sequence_number(expiry);
+        env.ledger().set_timestamp(expiry);
 
         let result = client.try_get_delegate(&delegate);
         assert!(result.is_err());
@@ -836,10 +837,10 @@ mod tests {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
         let delegate = Address::generate(&env);
-        let current = env.ledger().sequence();
+        let current = env.ledger().timestamp();
         let expiry = current + 1;
         client.set_delegate(&delegate, &expiry, &true);
-        env.ledger().set_sequence_number(expiry);
+        env.ledger().set_timestamp(expiry);
 
         let active = client.delegates();
         assert!(!active.contains_key(delegate));
@@ -1038,7 +1039,7 @@ mod tests {
         let ttl_before = instance_ttl(&env, &cid);
 
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &true);
+        client.set_delegate(&delegate, &1000_u64, &true);
 
         let ttl_after = instance_ttl(&env, &cid);
         assert!(
@@ -1053,7 +1054,7 @@ mod tests {
         client.initialize(&owner, &Vec::new(&env));
 
         let delegate = Address::generate(&env);
-        client.set_delegate(&delegate, &1000_u32, &false);
+        client.set_delegate(&delegate, &1000_u64, &false);
         let ttl_before = instance_ttl(&env, &cid);
 
         client.remove_delegate(&delegate);

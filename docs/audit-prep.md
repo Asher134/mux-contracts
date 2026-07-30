@@ -119,7 +119,7 @@ Every state-mutating entry point calls `require_auth()` on the expected signer b
 | Function | Auth required | Mutates storage | Notes |
 |---|---|---|---|
 | `initialize(owner, guardians)` | `owner` | Yes | One-time; `AlreadyInitialized` on re-call |
-| `set_delegate(delegate, expiry_ledger, can_spend)` | owner | Yes | Capped at `MAX_DELEGATES = 64` |
+| `set_delegate(delegate, expires_at, can_spend)` | owner | Yes | Capped at `MAX_DELEGATES = 64` |
 | `remove_delegate(delegate)` | owner | Yes | `DelegateNotFound` if absent |
 | `set_spend_limit(asset, amount, period_ledgers)` | owner | Yes | `amount > 0`, `period_ledgers > 0` |
 | `debit_spend(asset, spend)` | contract itself | Yes | Period auto-resets via ledger sequence |
@@ -171,7 +171,7 @@ These items are known before the audit and are documented here so auditors can f
 | `AlreadyInitialized` guard | `mux-account`, `mux-permissions` | `initialize` functions |
 | `overflow-checks = true` in release | All | `Cargo.toml` `[profile.release]` |
 | `panic = "abort"` in release | All | `Cargo.toml` `[profile.release]` |
-| Delegate expiry (`expiry_ledger`) | `mux-account` | `set_delegate` / `DelegateInfo` struct |
+| Delegate expiry (`expires_at`) | `mux-account` | `set_delegate` / `DelegateInfo` struct |
 | Spend limit period reset via ledger sequence | `mux-account` | `debit_spend` |
 | `MAX_BATCH_SIZE = 50` | `mux-batcher` | `execute_batch` |
 | `MAX_DELEGATES = 64` | `mux-account` | `set_delegate` |
