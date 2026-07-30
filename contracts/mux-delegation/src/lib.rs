@@ -1,13 +1,24 @@
 /*!
- * mux-delegation: Delegate permission management for Mux Protocol.
+ * mux-delegation: Scoped delegate permission management for Mux Protocol.
  *
- * Allows an owner to grant or revoke scoped permissions to a delegate
- * address. Delegates act on behalf of owners only within the granted
- * permission set.
+ * An *owner* (any Soroban [`Address`]) can grant a named set of *permissions*
+ * to a *delegate* address. Delegates act on behalf of the owner **only within
+ * the granted permission set** — they cannot self-escalate or sub-grant.
  *
- * Each owner may register up to 128 delegates. Each delegate may hold up to
- * 64 permissions. All state-mutating operations require owner authorization
- * and emit an audit event under the `mux_dlg` contract tag.
+ * Each owner may register up to [`MAX_DELEGATES_PER_OWNER`] (128) delegates.
+ * Each delegate may hold up to [`MAX_DELEGATE_PERMS`] (64) permissions. All
+ * state-mutating operations require owner authorization and emit an audit
+ * event under the `mux_dlg` contract tag.
+ *
+ * # Permission Model
+ *
+ * Permissions are opaque [`Symbol`] values chosen by the application layer
+ * (e.g. `"transfer"`, `"read"`, `"swap"`). Calling `grant_delegate` with a
+ * new permission list **replaces** any prior grant for the same
+ * `(owner, delegate)` pair — there is no append mode.
+ *
+ * See [`docs/delegation-permission-model.md`] for the full security model,
+ * storage layout, bounds rationale, and TypeScript binding notes.
  *
  * # Public Interface
  *
@@ -32,16 +43,29 @@
  *
  * # Bounds
  *
- * - `MAX_DELEGATE_PERMS` = 64 — maximum permissions per (owner, delegate) pair.
- * - `MAX_DELEGATES_PER_OWNER` = 128 — maximum delegate addresses per owner (storage-griefing guard).
+ * - [`MAX_DELEGATE_PERMS`] = 64 — maximum permissions per `(owner, delegate)` pair.
+ * - [`MAX_DELEGATES_PER_OWNER`] = 128 — maximum delegate addresses per owner
+ *   (storage-griefing guard).
  *
  * # `no_std` Constraints
  *
  * This crate is `#![no_std]` and does not use `extern crate alloc`.
  * All data structures use Soroban SDK types backed by the Soroban host.
  *
+ * # Error Codes (Stable ABI)
+ *
  * Error codes 6001–6004 are stable ABI — coordinate changes with a registry
  * version bump.
+ *
+ * | Code | Variant              | Description                                         |
+ * |------|----------------------|-----------------------------------------------------|
+ * | 6001 | `NotADelegate`       | No grant exists for the `(owner, delegate)` pair    |
+ * | 6002 | `TooManyPermissions` | `permissions` list exceeds the 64-entry cap         |
+ * | 6003 | `EmptyPermissions`   | `permissions` is empty; at least one required       |
+ * | 6004 | `TooManyDelegates`   | Owner already has 128 delegates registered          |
+ *
+ * [`docs/delegation-permission-model.md`]: ../../docs/delegation-permission-model.md
+ * [`docs/audit-events.md`]: ../../docs/audit-events.md
  */
 
 #![no_std]
