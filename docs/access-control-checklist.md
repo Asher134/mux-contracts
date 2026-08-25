@@ -28,12 +28,17 @@ Legend:
 - [ ] `remove_delegate` — `require_owner` helper called.
 - [ ] `set_spend_limit` — `require_owner` helper called.
 - [ ] `debit_spend` — `current_contract_address().require_auth()` called (contract-internal only).
+- [ ] `register_session_key` / `revoke_session_key` — `require_owner` helper called.
+- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`).
+- [ ] `set_metadata` — `require_owner` helper called.
 - [ ] No public function mutates storage without an auth check.
 
 ### 1.2 `mux-batcher`
 
 - [ ] `execute_batch` — `caller.require_auth()` called before any operations are dispatched.
 - [ ] `simulate_batch` — `caller.require_auth()` called (preflight is also auth-gated).
+- [ ] `submit_batch` — delegates to `execute_batch`, deriving `caller` from the invoker; same auth guarantee applies.
+- [ ] `set_registry_metadata` — **intentionally no auth check**; write-once (rejects with `MetadataAlreadySet` on a second call), expected to be called by the deployer immediately after deployment. Confirm this write-once guard is still in place if this function changes.
 - [ ] Batch operations are dispatched under the **caller's** auth context, not the batcher contract's.
 
 ### 1.3 `mux-permissions`
@@ -43,7 +48,11 @@ Legend:
 - [ ] `grant_role` — `require_admin` helper called.
 - [ ] `revoke_role` — `require_admin` helper called.
 - [ ] `has_permission`, `get_roles`, `get_role_members` — read-only; no auth required (acceptable).
-- [ ] No role mutation is possible without admin signature.
+- [ ] `set_admin_threshold` — `require_admin` helper called.
+- [ ] `propose_admin` — `require_admin` helper called.
+- [ ] `approve_admin` — `require_admin` helper called, plus `approver.require_auth()` for the individual approval.
+- [ ] `set_metadata` — `require_admin` helper called.
+- [ ] No role or admin-set mutation is possible without admin signature.
 
 ### 1.4 `mux-policy`
 
@@ -68,6 +77,9 @@ Legend:
 - [ ] `initiate_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
 - [ ] `cancel_recovery` — `require_owner` helper called; only current owner can cancel.
 - [ ] `execute_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
+- [ ] `approve_recovery_admin` — `require_owner` helper called; lets the owner bypass the timelock for a pending recovery.
+- [ ] `add_guardian` / `remove_guardian` — `require_owner` helper called; `remove_guardian` additionally rejects removing the last guardian.
+- [ ] `set_registry` — `owner.require_auth()` called.
 - [ ] No recovery mutation is possible without guardian or owner authorization.
 
 ---

@@ -121,18 +121,6 @@ const MAX_WALLETS: u32 = 128;
 const TTL_THRESHOLD: u32 = 17_280; // ~1 day
 const TTL_EXTEND_TO: u32 = 518_400; // ~30 days
 
-// ── Event helpers ─────────────────────────────────────────────────────────────
-
-/// Publish a contract event with the `mux_wreg` topic prefix.
-///
-/// # Arguments
-/// * `action` – short symbol identifying the action (≤ 8 chars).
-/// * `data`   – event payload; serialised as the event body.
-fn emit(env: &Env, action: Symbol, data: impl soroban_sdk::IntoVal<Env, soroban_sdk::Val>) {
-    env.events()
-        .publish((symbol_short!("mux_wreg"), action), data);
-}
-
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 /// Named wallet address registry.
@@ -163,7 +151,6 @@ impl MuxWalletRegistry {
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
         emit(&env, symbol_short!("init"), owner);
         Self::extend_ttl(&env);
-        emit(&env, symbol_short!("init"), owner);
         Ok(())
     }
 
@@ -201,7 +188,6 @@ impl MuxWalletRegistry {
             .set(&DataKey::Wallet(name.clone()), &wallet);
         emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Self::extend_ttl(&env);
-        emit(&env, symbol_short!("wlt_reg"), (name, wallet));
         Ok(())
     }
 
@@ -264,7 +250,6 @@ impl MuxWalletRegistry {
             .set(&DataKey::Metadata(name.clone()), &meta);
         emit(&env, symbol_short!("wlt_meta"), (name, wallet));
         Self::extend_ttl(&env);
-        emit(&env, symbol_short!("wlt_regm"), (name, wallet));
         Ok(())
     }
 

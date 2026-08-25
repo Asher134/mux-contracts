@@ -25,7 +25,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | `initialize(owner, guardians)` | A | One-time setup; owner authorizes |
 | `unpause()` | A | Owner only |
 | `is_paused()` | P | Read-only |
-| `set_delegate(delegate, expiry, can_spend)` | A | Owner only; paused check |
+| `set_delegate(delegate, expires_at, can_spend)` | A | Owner only; paused check |
 | `remove_delegate(delegate)` | A | Owner only; paused check |
 | `set_spend_limit(asset, amount, period)` | A | Owner only; paused check |
 | `debit_spend(asset, spend)` | U | Caller (contract) authorizes; paused check; reentrancy guard |
@@ -33,7 +33,9 @@ by a specific actor; public entrypoints are callable by anyone.
 | `delegates()` | P | Read-only; filters expired |
 | `get_delegate(delegate)` | P | Read-only |
 | `guardians()` | P | Read-only |
-| `execute_with_session(session_key, payload)` | U | Session key auth (TODO) |
+| `register_session_key(session_key, expires_at, scopes)` | A | Owner only; paused check; capped at `MAX_SESSION_KEYS` |
+| `revoke_session_key(session_key)` | A | Owner only; paused check |
+| `execute_with_session(session_key, payload)` | U | Session key auth; validates registration/revocation/expiry only — does not execute `payload` (see [aa_sequence_diagram.md](aa_sequence_diagram.md)) |
 | `set_metadata(meta)` | A | Owner only |
 | `get_metadata()` | P | Read-only |
 
@@ -66,11 +68,14 @@ by a specific actor; public entrypoints are callable by anyone.
 
 | Entrypoint | Auth | Notes |
 |---|---|---|
-| `grant_delegate(owner, delegate, perms)` | U | Owner authorizes |
+| `grant_delegate(owner, delegate, perms)` | U | Owner authorizes; capped at `MAX_DELEGATE_PERMS` / `MAX_DELEGATES_PER_OWNER` |
 | `revoke_delegate(owner, delegate)` | U | Owner authorizes |
 | `get_delegate_permissions(owner, delegate)` | P | Read-only |
 | `is_delegate(owner, delegate, perm)` | P | Read-only |
 | `get_delegates(owner)` | P | Read-only |
+| `check_delegate(owner, delegate, perm)` | P | Read-only; `Ok(())`/`Err(NotADelegate)` variant of `is_delegate` |
+| `link_contract_id(admin, contract_id)` | A | Admin authorizes; write-once |
+| `get_contract_id()` | P | Read-only |
 
 ## mux-permissions
 
@@ -106,12 +111,18 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(owner, guardians)` | U | Owner authorizes |
-| `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes |
+| `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes; rejects if a non-expired recovery is already pending |
 | `cancel_recovery()` | U | Owner authorizes |
-| `execute_recovery(guardian)` | U | Guardian authorizes; timelock check |
+| `execute_recovery(guardian)` | U | Guardian authorizes; timelock and expiry check |
+| `approve_recovery_admin()` | U | Owner authorizes; executes a pending recovery immediately, bypassing the timelock |
+| `add_guardian(guardian)` | U | Owner authorizes; capped at `MAX_GUARDIANS` |
+| `remove_guardian(guardian)` | U | Owner authorizes; rejects if it would leave zero guardians |
 | `owner()` | P | Read-only |
 | `guardians()` | P | Read-only |
 | `recovery_status()` | P | Read-only |
+| `recovery_request()` | P | Read-only; full request record or `None` |
+| `set_registry(owner, registry_id)` | U | Owner authorizes |
+| `registry_id()` | P | Read-only |
 
 ## mux-registry
 
@@ -130,7 +141,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(admin)` | A | One-time setup |
-| `set_policy(account, asset, limit)` | A | Admin only |
+| `set_policy(account, asset, limit, period_ledgers)` | A | Admin only; resets `spent` to 0 |
 | `get_policy(account, asset)` | P | Read-only |
 | `check_spend(account, asset, amount)` | P | Read-only; no state mutation |
 
@@ -140,6 +151,7 @@ by a specific actor; public entrypoints are callable by anyone.
 |---|---|---|
 | `initialize(owner)` | U | Owner authorizes |
 | `register_wallet(name, wallet)` | U | Owner authorizes |
-| `register_wallet_with_metadata(name, wallet, label, desc)` | U | Owner authorizes |
+| `register_wallet_with_metadata(name, wallet, label, desc)` | U | Owner authorizes; capped at `MAX_WALLETS` |
 | `get_wallet(name)` | P | Read-only |
 | `get_metadata(name)` | P | Read-only |
+| `list_wallets()` | P | Read-only |
