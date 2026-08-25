@@ -740,6 +740,9 @@ version = "0.1.0"
 dependencies = [
  "mux-account",
  "mux-batcher",
+ "mux-permissions",
+ "serde",
+ "serde_json",
  "soroban-sdk",
  "soroban-test-helpers",
 ]
