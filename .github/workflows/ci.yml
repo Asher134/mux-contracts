@@ -15,6 +15,18 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ── #682: scan for leaked secrets ─────────────────────────────────────────
+  scan-secrets:
+    name: Scan for leaked secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100  # Scan last 100 commits
+      - name: Scan git history for secret keys
+        run: bash scripts/scan-git-secrets.sh --depth 100
+  # ── end #682 ──────────────────────────────────────────────────────────────
+
   rust:
     name: Rust (fmt, clippy, test, wasm)
     runs-on: ubuntu-latest
@@ -189,3 +201,13 @@ jobs:
       - name: Build distribution
         working-directory: bindings
         run: npm run build
+
+  # ── #681: docker-compose localnet smoke ────────────────────────────────────
+  docker-smoke:
+    name: Docker-compose localnet smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start localnet and run smoke checks
+        run: bash scripts/ci-docker-smoke.sh
+  # ── end #681 ──────────────────────────────────────────────────────────────
