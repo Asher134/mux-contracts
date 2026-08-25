@@ -230,16 +230,24 @@ This repository **commits `Cargo.lock`** and keeps it under version control.
 Example test:
 ```rust
 #[test]
-fn test_session_key_valid_returns_true() {
+fn test_execute_with_session_succeeds_for_registered_key() {
     let (env, client, owner) = setup();
     let session_key = Address::generate(&env);
     let expires_at = env.ledger().timestamp() + 3600;
     let scopes = Vec::new(&env);
 
-    client.register_session_key(&owner, &session_key, &expires_at, &scopes);
-    assert!(client.is_session_key_valid(&owner, &session_key));
+    client.register_session_key(&session_key, &expires_at, &scopes);
+    let payload = Bytes::new(&env);
+    let _ = client.execute_with_session(&session_key, &payload);
 }
 ```
+
+`register_session_key` takes `(session_key, expires_at, scopes)` — the owner is
+read from stored account state and must `require_auth()`, so it is not passed
+explicitly. There is no `is_session_key_valid` query entrypoint; validity is
+checked internally by `execute_with_session` (see
+[`docs/entrypoint-matrix.md`](docs/entrypoint-matrix.md) for the full list of
+`mux-account` entrypoints).
 
 ## Security
 

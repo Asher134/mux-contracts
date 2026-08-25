@@ -1,3 +1,8 @@
+> **Non-canonical scratch note.** This file is a historical issue-tracking note and
+> does not reflect the current contract workspace. For architecture, see
+> [`docs/architecture-overview.md`](docs/architecture-overview.md) and
+> [`contracts/README.md`](contracts/README.md).
+
 Issue:#396 Define recovery request storage struct
 
 Context

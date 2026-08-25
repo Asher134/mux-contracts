@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `CONTRIBUTING.md` example called a nonexistent `is_session_key_valid` entrypoint; replaced with a real `register_session_key` + `execute_with_session` example (#700)
+- `.github/workflows/deploy.yml` set the `DEPLOYER_SECRET_KEY` env var but `scripts/deploy.sh` reads `DEPLOYER_PRIVATE_KEY`, so the deploy workflow always ran with an unset key; renamed for consistency across the workflow and all deployer-key docs (#702)
+- `docs/architecture-overview.md` was missing `mux-policy` and `mux-spending-policy` from the contract list and diagram; added both and marked `Somzilla.md` as a non-canonical scratch note (#701)
+
 ### Added
+- `scripts/check-doc-examples.sh` — CI guard verifying `CONTRIBUTING.md` example code only calls entrypoints that exist (#700)
+- `scripts/check-architecture-docs.sh` — CI guard verifying every contract crate is listed in `docs/architecture-overview.md` (#701)
+- `scripts/check-deploy-secret-name.sh` — CI guard verifying the deploy workflow's secret env var name matches what `scripts/deploy.sh` reads (#702)
+- `scripts/check-changelog-release-artifacts.sh` — CI guard verifying every tagged release lists WASM hashes and the bindings package version (#699)
+- `### Release Artifacts` requirement added to `.github/CHANGELOG_TEMPLATE.md`: tagged releases must list contract WASM SHA-256 hashes and the bindings package version together (#699)
+- CI/CD key-handling guidance (GitHub Environments scoping, mandatory post-deploy rotation) added to `docs/deployer-key-requirements.md` (#702)
 - Contract PR guidelines section in `CONTRIBUTING.md` covering `no_std` safety, error enum conventions, storage bounds, TTL management, unit tests, and a pre-review checklist (#489, #490, #503, #504)
 - `SECURITY.md` with vulnerability disclosure policy, scope, safe-harbor guidelines, and response timeline (#490)
 - Complete contract index in `contracts/README.md` covering all 10 contract crates (#503)

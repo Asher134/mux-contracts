@@ -50,7 +50,7 @@ If the previous contract ID is no longer usable (e.g. a factory pattern deployed
 
 3. Run a dry-run to verify the plan:
    ```bash
-   DEPLOYER_SECRET_KEY=S... bash scripts/deploy.sh \
+   DEPLOYER_PRIVATE_KEY=S... bash scripts/deploy.sh \
      --network mainnet \
      --dry-run \
      --contract <CONTRACT_NAME>
@@ -58,7 +58,7 @@ If the previous contract ID is no longer usable (e.g. a factory pattern deployed
 
 4. Deploy after confirming dry-run output:
    ```bash
-   DEPLOYER_SECRET_KEY=S... bash scripts/deploy.sh \
+   DEPLOYER_PRIVATE_KEY=S... bash scripts/deploy.sh \
      --network mainnet \
      --contract <CONTRACT_NAME>
    ```

@@ -48,6 +48,14 @@ jobs:
         run: bash scripts/test-check-contract-sizes.sh
       - name: Deploy dry-run (testnet simulation)
         run: bash scripts/deploy.sh --dry-run --network testnet --skip-build
+      - name: Check CONTRIBUTING.md examples reference real entrypoints
+        run: bash scripts/check-doc-examples.sh
+      - name: Check architecture docs list every contract crate
+        run: bash scripts/check-architecture-docs.sh
+      - name: Check deploy workflow secret name matches deploy.sh
+        run: bash scripts/check-deploy-secret-name.sh
+      - name: Check tagged releases have WASM hashes + binding version
+        run: bash scripts/check-changelog-release-artifacts.sh
 
   deploy-dry-run:
     name: Deploy dry-run (batcher)
