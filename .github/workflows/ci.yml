@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
           targets: wasm32-unknown-unknown
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -42,8 +42,28 @@ jobs:
         run: cargo test --workspace --all-features
       - name: Build WASM (release)
         run: bash scripts/build-wasm.sh --release
+
+      # ── #664: WASM hash verification ──────────────────────────────────────
+      # Compute SHA-256 for every built mux_*.wasm and write wasm-hashes.txt.
+      # Fail fast if no WASMs were produced (build step above must have run).
+      - name: Compute WASM hashes
+        run: bash scripts/compute-wasm-hashes.sh
+      - name: Upload WASM hashes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-hashes
+          path: wasm-hashes.txt
+          if-no-files-found: error
+      # ── end #664 ──────────────────────────────────────────────────────────
+
       - name: Check contract sizes
         run: bash scripts/check-contract-sizes.sh
+
+      # ── #663: no testutils in release WASM ────────────────────────────────
+      - name: check-no-testutils (Cargo.toml + WASM scan)
+        run: bash scripts/check-no-testutils.sh
+      # ── end #663 ──────────────────────────────────────────────────────────
+
       - name: Check size-check coverage
         run: bash scripts/test-check-contract-sizes.sh
       - name: Deploy dry-run (testnet simulation)
@@ -56,6 +76,77 @@ jobs:
         run: bash scripts/check-deploy-secret-name.sh
       - name: Check tagged releases have WASM hashes + binding version
         run: bash scripts/check-changelog-release-artifacts.sh
+
+  # ── #661: cargo deny supply-chain check ─────────────────────────────────────
+  deny:
+    name: cargo deny (licenses, advisories, bans)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Use the official cargo-deny action for a pinned, cached install.
+      # deny.toml controls all policy; failures here block merge.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+  # ── end #661 ──────────────────────────────────────────────────────────────
+
+  # ── #663: no-testutils script self-test ──────────────────────────────────────
+  check-no-testutils:
+    name: check-no-testutils (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test check-no-testutils.sh behaviour
+        run: bash scripts/test-check-no-testutils.sh
+  # ── end #663 ──────────────────────────────────────────────────────────────
+
+  # ── #664: verify-wasm-hash script self-test ──────────────────────────────────
+  verify-wasm-hash:
+    name: verify-wasm-hash (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test verify-wasm-hash.sh behaviour
+        run: bash scripts/test-verify-wasm-hash.sh
+  # ── end #664 ──────────────────────────────────────────────────────────────
+
+  # ── #662: llvm-cov coverage ───────────────────────────────────────────────────
+  coverage:
+    name: Coverage (cargo-llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cov-
+      - name: Install cargo-llvm-cov
+        # --locked pins to the exact versions in Cargo.lock inside cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Validate coverage script (stub tests)
+        run: bash scripts/test-coverage.sh
+      - name: Run coverage (LCOV output)
+        run: bash scripts/coverage.sh --lcov
+      - name: Upload LCOV to Codecov
+        # Upload is best-effort: coverage failures don't block the build.
+        # Remove `continue-on-error` if you want hard enforcement.
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/lcov.info
+          flags: rust
+          fail_ci_if_error: false
+  # ── end #662 ──────────────────────────────────────────────────────────────
 
   deploy-dry-run:
     name: Deploy dry-run (batcher)

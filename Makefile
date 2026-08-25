@@ -1,4 +1,9 @@
-.PHONY: all build test clean fmt lint clippy wasm check-sizes size-check coverage
+.PHONY: all build test clean fmt lint clippy wasm check-sizes size-check \
+        coverage coverage-ci \
+        deny \
+        check-no-testutils \
+        verify-wasm-hashes \
+        deploy-dry-run deploy-ci
 
 all: fmt lint build test
 
@@ -28,9 +33,31 @@ check-sizes: wasm
 # Alias so both spellings work: `make check-size` and `make check-sizes`
 size-check: check-sizes
 
-# LLVM source-based coverage. Prints a report stub if llvm-tools-preview is missing.
+# Supply-chain license and advisory check. deny.toml controls policy. (#661)
+# Requires: cargo install cargo-deny
+deny:
+	cargo deny check
+
+# Ensure no mux-* Cargo.toml enables soroban-sdk testutils in [dependencies]
+# and that built WASMs (if present) contain no testutils bytes. (#663)
+check-no-testutils:
+	bash scripts/check-no-testutils.sh
+
+# Compute SHA-256 hashes for every built release WASM and print them. (#664)
+# Run after `make wasm`. Uses scripts/verify-wasm-hash.sh --compute-only.
+verify-wasm-hashes:
+	bash scripts/compute-wasm-hashes.sh
+
+# LLVM source-based coverage using cargo-llvm-cov when available; falls back
+# to the legacy stub if the tool is not installed. (#662)
+# Requires: cargo install cargo-llvm-cov && rustup component add llvm-tools-preview
 coverage:
 	bash scripts/coverage.sh
+
+# CI coverage target: always produces LCOV output to coverage/lcov.info. (#662)
+# Fails if cargo-llvm-cov is not installed (install it in the CI job first).
+coverage-ci:
+	bash scripts/coverage.sh --lcov
 
 # Simulate a full deployment without submitting any on-chain transactions.
 # No secret keys or live network access required. Useful for local validation. (#449)
