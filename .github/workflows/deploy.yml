@@ -1,7 +1,10 @@
 name: Deploy Contracts
 
 # Manually triggered with network and contract selection.
-# Requires DEPLOYER_SECRET_KEY repository secret to be set.
+# Requires DEPLOYER_PRIVATE_KEY repository secret to be set (see
+# docs/deployer-key-requirements.md). This is a long-lived funded key, not
+# OIDC/keyless — it MUST be rotated (drained and replaced) after every
+# mainnet deployment cycle per the security checklist in that doc.
 #
 # Usage (GitHub UI):
 #   Actions → Deploy Contracts → Run workflow → fill inputs
@@ -131,7 +134,7 @@ jobs:
 
       - name: Deploy contracts
         env:
-          DEPLOYER_SECRET_KEY: ${{ secrets.DEPLOYER_SECRET_KEY }}
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
         run: |
           DRY_FLAG=""
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then

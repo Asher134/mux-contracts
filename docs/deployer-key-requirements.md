@@ -131,6 +131,21 @@ For CI/CD (GitHub Actions example):
 - [ ] For mainnet: key is stored in a secrets manager or hardware wallet
 - [ ] Deployer key is **drained and rotated** after each mainnet deployment cycle
 
+### CI/CD key handling
+
+`.github/workflows/deploy.yml` currently authenticates with a long-lived
+`DEPLOYER_PRIVATE_KEY` GitHub Actions secret — there is no OIDC/keyless
+signing path yet. Until that changes:
+
+- [ ] The `DEPLOYER_PRIVATE_KEY` repo secret is scoped to the `mainnet` /
+      `testnet` GitHub Environments (Settings → Environments), not a bare
+      repository secret, so deploys require environment protection rules.
+- [ ] The key is rotated (drained on-chain, replaced in the secret store)
+      immediately after every mainnet deployment run — do not reuse a
+      mainnet deployer key across deployment cycles.
+- [ ] Anyone who can trigger `workflow_dispatch` on `deploy.yml` is treated
+      as having spend authority over the funded deployer account.
+
 ---
 
 ## Related documents
