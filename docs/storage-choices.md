@@ -1,7 +1,9 @@
 # Mux Protocol — Instance vs Persistent Storage Choices
 
-**Version:** 0.1.0
-**Date:** 2026-07-25
+**Version:** 1.0.0  
+**Date:** 2026-08-25  
+**Status:** Complete (Audit Ready)  
+**Issue:** #684  
 **Related:** [Storage Griefing Notes](storage-griefing.md) · [Threat Model](threat-model.md)
 
 ---
@@ -231,3 +233,19 @@ When binding these contracts from TypeScript:
 3. **The hybrid pattern in mux-policy is the most complex.** Pay special attention to the interaction between instance storage (admin, wallet index) and persistent storage (per-wallet limits). Both TTLs must be maintained.
 
 4. **mux-delegation's persistent storage is unusual.** Most contracts use instance storage. The delegation contract's choice of persistent storage is deliberate and should be verified against the TTL extension logic.
+
+5. **TTL extension is testable.** Run `bash scripts/test-ttl-keeper.sh` to verify that all contracts correctly implement TTL extension for both instance and persistent storage. This addresses audit checklist section 6.
+
+---
+
+## Related Testing and Verification
+
+- **TTL keeper test suite:** `bash scripts/test-ttl-keeper.sh`
+  - Validates TTL constants across all contracts
+  - Confirms extend_ttl() is called on write paths
+  - Verifies unit test coverage for TTL behavior
+  - Checks persistent storage TTL handling
+
+- **Storage capacity tests:** See [storage-griefing.md](storage-griefing.md) for the complete list of collection cap unit tests
+
+- **Keeper deployment runbook:** See [storage-griefing.md#deployment-runbook](storage-griefing.md#deployment-runbook--ttl-keeper) for the production keeper script requirements

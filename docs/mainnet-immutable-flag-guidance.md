@@ -1,8 +1,9 @@
 # Mainnet Immutable Flag Guidance
 
-**Version:** 0.1.0  
-**Date:** 2026-07-25  
-**Status:** Draft  
+**Version:** 1.0.0  
+**Date:** 2026-08-25  
+**Status:** Final (Audit Ready)  
+**Issue:** #683  
 **Related:** [Mainnet Deploy Checklist](mainnet-deploy-checklist.md), [Contract Upgrade Pattern](contract-upgrade-pattern.md)
 
 ---
@@ -122,6 +123,122 @@ pub fn renounce_upgrade_authority(env: Env) -> Result<(), ContractError> {
     Ok(())
 }
 ```
+
+---
+
+## Resolving the immutability vs upgrade() conflict
+
+### The core tension
+
+The presence of an `upgrade()` function in a contract's WASM appears to conflict with immutability claims. However, **having `upgrade()` in the code does not make a contract upgradeable in practice** — it depends on whether the admin authorization path can be satisfied.
+
+### Three patterns for Mux contracts
+
+#### Pattern 1: No upgrade() function (strongest immutability)
+
+Contracts: `mux-account`, `mux-account-factory`, `mux-recovery`, `mux-registry`, `mux-spending-policy`, `mux-wallet-registry`
+
+**Guarantee:** WASM cannot be changed because no entry point exists to invoke `update_current_contract_wasm()`.
+
+**Verification:**
+```bash
+# Confirm upgrade() is not in the contract ABI
+stellar contract inspect --wasm target/wasm32-unknown-unknown/release/mux_account.wasm \
+  | grep -q "upgrade" && echo "ERROR: upgrade found" || echo "OK: no upgrade"
+```
+
+#### Pattern 2: upgrade() with optional admin (opt-in upgradability)
+
+Contracts: `mux-batcher`, `mux-delegation`
+
+**Mechanism:**
+- `initialize(admin)` is optional — the contract works without it
+- If `initialize()` is never called, `DataKey::Admin` is never written
+- `upgrade()` calls `require_admin()` which reads `DataKey::Admin`
+- Without admin in storage, `upgrade()` always returns `NotInitialized`
+
+**Immutability guarantee:** Deployment is immutable if `initialize()` is never called.
+
+**Mainnet deployment guidance:**
+```bash
+# Deploy the contract
+stellar contract deploy --wasm mux_batcher.wasm --network mainnet
+
+# DO NOT call initialize() if you want immutability
+# The contract is now functionally immutable despite having upgrade() in WASM
+```
+
+**Verification:**
+```bash
+# Confirm initialize() was never called by checking for Admin key
+# If this call fails with NotInitialized or KeyNotFound, deployment is immutable
+stellar contract invoke \
+  --id $CONTRACT_ID \
+  --network mainnet \
+  -- \
+  admin
+
+# Or check event history for 'init' events
+stellar contract events --id $CONTRACT_ID --network mainnet \
+  | grep -q "init" && echo "WARNING: initialized" || echo "OK: never initialized"
+```
+
+#### Pattern 3: upgrade() with mandatory admin (deliberate upgradeability)
+
+Contracts: `mux-policy`, `mux-permissions`
+
+**Mechanism:**
+- `initialize(admin)` is mandatory for the contract to function
+- Admin is always present in storage after initialization
+- `upgrade()` can always be called by the admin
+
+**Immutability approach:** Use Option C (renounce authority) if immutability is desired post-deploy.
+
+**For mux-policy specifically:**
+The policy contract is designed for evolution — daily spend limits may need adjustments based on market conditions or governance decisions. The `upgrade()` function is intentional and should remain callable.
+
+**For mux-permissions specifically:**
+Admin is mandatory for RBAC operations, so `DataKey::Admin` always exists. If immutability is desired, deploy with an admin that commits to never calling `upgrade()`, or add a `renounce_upgrade_authority()` function (see Option C).
+
+### Decision tree for mainnet deployment
+
+```
+Does the contract have upgrade() in WASM?
+│
+├─ No → Deploy as-is (Pattern 1: fully immutable)
+│
+└─ Yes → Is initialize(admin) mandatory for core functionality?
+    │
+    ├─ No (mux-batcher, mux-delegation)
+    │   └─ Want immutability?
+    │       ├─ Yes → Never call initialize() (Pattern 2: opt-in)
+    │       └─ No → Call initialize(admin) after deploy
+    │
+    └─ Yes (mux-policy, mux-permissions)
+        └─ Want immutability eventually?
+            ├─ Yes → Add renounce_upgrade_authority() (Option C)
+            └─ No → Accept upgradeable design (Pattern 3)
+```
+
+### Audit checklist for immutability claims
+
+For each contract claiming to be immutable on mainnet:
+
+- [ ] **Pattern 1:** Confirm `upgrade()` is not in WASM ABI
+  - Method: `stellar contract inspect --wasm <file> | grep upgrade`
+  - Expected: No matches
+
+- [ ] **Pattern 2:** Confirm `initialize()` was never called
+  - Method: Query admin key on deployed contract
+  - Expected: `NotInitialized` or `KeyNotFound` error
+
+- [ ] **Pattern 3:** If claiming eventual immutability, confirm `renounce_upgrade_authority()` exists and was called
+  - Method: Check event logs for `upgrade_authority_renounced` event
+  - Expected: Event present with timestamp
+
+- [ ] **All patterns:** WASM hash recorded in CONTRACT_IDS.md
+- [ ] **All patterns:** Deployment added to immutability registry (below)
+- [ ] **All patterns:** Immutability decision documented in mainnet deploy runbook
 
 ---
 
