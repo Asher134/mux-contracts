@@ -9,8 +9,19 @@ description = "Integration / fuzz scaffolding tests for mux-contracts"
 soroban-sdk = { workspace = true, features = ["testutils"] }
 mux-account = { path = "../contracts/mux-account", features = ["testutils"] }
 mux-batcher = { path = "../contracts/mux-batcher", features = ["testutils"] }
+mux-permissions = { path = "../contracts/mux-permissions", features = ["testutils"] }
 soroban-test-helpers = { path = "../contracts/soroban-test-helpers" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[test]]
 name = "fuzz_placeholder"
 path = "fuzz_placeholder.rs"
+
+[[test]]
+name = "cross_contract_integration"
+path = "cross_contract_integration.rs"
+
+[[test]]
+name = "fixture_vectors"
+path = "fixture_vectors.rs"

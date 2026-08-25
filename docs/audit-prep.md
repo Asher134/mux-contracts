@@ -221,12 +221,25 @@ cargo test --workspace --all-features
 | | `test_role_lifecycle_emits_events` | `role_crt` + `role_grt` + `role_rev` events |
 | | `test_ttl_extended_on_write` | TTL extension does not panic |
 
+Workspace-level tests, run via `cargo test -p mux-contract-tests`:
+
+| File | Test | What it covers |
+|---|---|---|
+| `tests/fuzz_placeholder.rs` | `fuzz_account::session_keys_cap_holds_under_flood` | Flooding a fresh account to `MAX_SESSION_KEYS` (32) succeeds; the 33rd registration fails closed with `TooManySessionKeys`, and every pre-cap key still authorizes |
+| | `fuzz_account::session_key_update_at_cap_is_allowed` | Re-registering an existing session key at the cap does not grow the index |
+| | `fuzz_batcher::simulate_batch_oversized_gate_holds` | `simulate_batch` mirrors `execute_batch`'s empty/oversized size gate across a sweep of lengths |
+| `tests/cross_contract_integration.rs` | `batcher_execute_batch_invokes_account_set_delegate` | `execute_batch` → `mux-account.set_delegate` actually mutates the target account's delegate map |
+| | `batcher_execute_batch_invokes_permissions_grant_role` | `execute_batch` → `mux-permissions.grant_role` actually grants the role, observable via `has_permission` |
+| | `batcher_execute_batch_required_failure_leaves_account_untouched` | A required op that fails on the target (`NotInitialized`) aborts the batch and leaves no partial state |
+| | `batcher_execute_batch_optional_cross_contract_failure_is_soft` | An optional op that fails on the target counts as a soft failure, not a rollback |
+| `tests/fixture_vectors.rs` | 9 tests | Loads `tests/fixtures/test_vectors.json` and `tests/fixtures/account_limit_vectors.json` and drives `mux-account`, `mux-batcher`, and `mux-permissions` with the vectors' `input`, asserting the recorded `expect` (including error codes) against real contract behaviour |
+
+TypeScript side: `bindings/__tests__/test-vectors.test.ts` loads the same two fixture files and cross-checks every `expect.err` / `expect.code` against `muxAccountErrorMessage` / `muxBatcherErrorMessage` / `muxPermissionsErrorMessage` in `bindings/src/types.ts`, so a fixture and a binding drifting apart fails CI on both sides.
+
 ### Coverage gaps (known before audit)
 
 - No negative auth tests (unauthorized caller attempting a write). All current tests use `mock_all_auths()`.
 - No test for `debit_spend` period rollover across ledger sequences.
-- No test for `simulate_batch` with an oversized batch.
-- No integration test exercising `mux-batcher` calling into `mux-account` or `mux-permissions`.
 
 ---
 
