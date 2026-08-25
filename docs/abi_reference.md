@@ -189,6 +189,13 @@ pub struct SessionKeyRecord {
     pub scopes: Vec<Scope>,
     pub revoked: bool,
 }
+
+/// Registry-level metadata for this account instance.
+pub struct RegistryMeta {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+}
 ```
 
 ### Constants
@@ -215,7 +222,11 @@ pub struct SessionKeyRecord {
 | `delegates` | — | `Result<Map<Address, DelegateInfo>, MuxAccountError>` | Return all active (non-expired) delegates |
 | `get_delegate` | `delegate: Address` | `Result<DelegateInfo, MuxAccountError>` | Return delegate info if currently active |
 | `guardians` | — | `Result<Vec<Address>, MuxAccountError>` | Return guardian set |
-| `execute_with_session` | `session_key: Address, payload: Bytes` | `Result<Bytes, MuxAccountError>` | Execute a payload via an authorized session key (stub — registry integration pending) |
+| `register_session_key` | `session_key: Address, expires_at: u64, scopes: Vec<Scope>` | `Result<(), MuxAccountError>` | Register or replace a session key (max `MAX_SESSION_KEYS` per owner); owner-only |
+| `revoke_session_key` | `session_key: Address` | `Result<(), MuxAccountError>` | Revoke a registered session key; owner-only |
+| `execute_with_session` | `session_key: Address, payload: Bytes` | `Result<Bytes, MuxAccountError>` | Validate an authorized, non-expired, non-revoked session key (stub — does not decode or execute `payload`; always returns empty `Bytes` on success. See [`docs/aa_sequence_diagram.md`](aa_sequence_diagram.md) for the gap between this and the intended AA execution flow) |
+| `set_metadata` | `meta: RegistryMeta` | `Result<(), MuxAccountError>` | Store registry-level metadata for this account instance; owner-only |
+| `get_metadata` | — | `Option<RegistryMeta>` | Return stored registry metadata, or `None` if not set |
 
 ### Events
 
@@ -228,6 +239,7 @@ pub struct SessionKeyRecord {
 | `lmt_set` | `(asset: Address, amount: i128, period_ledgers: u32)` | Spend limit set |
 | `debited` | `(asset: Address, spend: i128)` | Spend debited |
 | `ses_exe` | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` | Session key execution without duplicating payload data |
+| `meta_set` | `name: String` | `set_metadata` succeeds |
 
 ### Errors
 
@@ -244,6 +256,7 @@ pub struct SessionKeyRecord {
 | `TooManyDelegates` | 9 | Delegate map has reached `MAX_DELEGATES` (64) |
 | `ReentrancyDetected` | 10 | Reentrant `debit_spend` call detected |
 | `ArithmeticOverflow` | 11 | Arithmetic overflow in spend tracking |
+| `TooManySessionKeys` | 12 | Owner has reached `MAX_SESSION_KEYS` (32) |
 
 ---
 
@@ -266,6 +279,13 @@ pub struct RoleInfo {
     pub name: Symbol,
     pub members: Vec<Address>,
     pub permissions: Vec<Symbol>,
+}
+
+/// Registry-level metadata for this permissions registry instance.
+pub struct RegistryMeta {
+    pub name: String,
+    pub version: String,
+    pub description: String,
 }
 ```
 
@@ -295,16 +315,17 @@ pub struct RoleInfo {
 | Method | Args | Returns | Description |
 |---|---|---|---|
 | `set_admin_threshold` | `threshold: u32` | `Result<(), MuxPermissionsError>` | Set approval count required to promote a pending admin (admin-only) |
-| `propose_admin` | `new_admin: Address` | `Result<(), MuxPermissionsError>` | Propose a new admin candidate (admin-only, idempotent) |
+| `get_admin_threshold` | — | `u32` | Return the current admin threshold, or `1` if never explicitly set |
+| `propose_admin` | `new_admin: Address` | `Result<(), MuxPermissionsError>` | Propose a new admin candidate (admin-only, idempotent, capped at `MAX_PENDING_ADMINS`) |
 | `approve_admin` | `approver: Address, new_admin: Address` | `Result<(), MuxPermissionsError>` | Approve a pending admin; promotes when threshold reached (admin-only) |
 | `get_pending_admins` | — | `Vec<Address>` | Return all pending admin candidates |
 
-### Methods — TTL Management
+### Methods — Registry Metadata
 
 | Method | Args | Returns | Description |
 |---|---|---|---|
-| `bump_ttl` | — | `()` | Extend instance storage TTL; callable by anyone (keepers, bots) |
-| `ttl_config` | — | `(u32, u32)` | Return `(TTL_THRESHOLD, TTL_EXTEND_TO)` constants |
+| `set_metadata` | `meta: RegistryMeta` | `Result<(), MuxPermissionsError>` | Store registry-level metadata for this instance; admin-only |
+| `get_metadata` | — | `Option<RegistryMeta>` | Return stored registry metadata, or `None` if not set |
 
 ### Events
 
@@ -318,6 +339,7 @@ pub struct RoleInfo {
 | `adm_prp` | `new_admin: Address` | Admin candidate proposed |
 | `adm_apr` | `(approver: Address, new_admin: Address)` | Admin approval recorded (below threshold) |
 | `adm_prm` | `new_admin: Address` | Admin promoted (threshold reached) |
+| `meta_set` | `name: String` | `set_metadata` succeeds |
 
 ### Errors
 
@@ -333,6 +355,7 @@ pub struct RoleInfo {
 | `TooManyRoles` | 8 | Account has reached `MAX_ROLES_PER_ACCOUNT` (32) |
 | `AdminNotFound` | 9 | Candidate is not in the pending admin list |
 | `AlreadyApproved` | 10 | Approver already voted for this candidate |
+| `TooManyPendingAdmins` | 11 | Pending admin list has reached `MAX_PENDING_ADMINS` (16) |
 
 ---
 
@@ -346,6 +369,9 @@ Spending-policy enforcement contract. Stores per-account spend limits and valida
 pub struct SpendLimit {
     pub asset: Address,
     pub limit: i128,
+    pub spent: i128,
+    pub reset_ledger: u32,
+    pub period_ledgers: u32,
 }
 ```
 
@@ -361,9 +387,9 @@ pub struct SpendLimit {
 | Method | Args | Returns | Auth | Description |
 |---|---|---|---|---|
 | `initialize` | `admin: Address` | `Result<(), SpendingPolicyError>` | `admin` | One-time setup; stores the admin address |
-| `set_policy` | `account: Address, asset: Address, limit: i128` | `Result<(), SpendingPolicyError>` | admin | Set or replace a spend limit for account/asset |
+| `set_policy` | `account: Address, asset: Address, limit: i128, period_ledgers: u32` | `Result<(), SpendingPolicyError>` | admin | Set or replace a spend limit for account/asset with a rolling `period_ledgers` window; resets `spent` to 0 |
 | `get_policy` | `account: Address, asset: Address` | `Result<SpendLimit, SpendingPolicyError>` | none | Return the spend limit for account/asset |
-| `check_spend` | `account: Address, asset: Address, amount: i128` | `Result<(), SpendingPolicyError>` | none | Check if amount is within the policy limit |
+| `check_spend` | `account: Address, asset: Address, amount: i128` | `Result<(), SpendingPolicyError>` | none | Check if amount is within the policy limit for the current rolling window (resets `spent` if the window has elapsed) |
 
 ### Events
 
@@ -384,6 +410,7 @@ pub struct SpendLimit {
 | `PolicyNotFound` | 4 | 404 | No spend policy for the account/asset pair |
 | `SpendLimitExceeded` | 5 | 400 | Requested spend exceeds the configured limit |
 | `InvalidInput` | 6 | 400 | Limit is not positive or spend amount is negative |
+| `InvalidPeriod` | 7 | 400 | `period_ledgers` is zero |
 
 ---
 
@@ -393,13 +420,33 @@ Maps symbolic names (`Symbol`) to wallet addresses. One owner is set at deploy
 time and is the only account permitted to write entries. Reads are open to any
 caller.
 
+### Types
+
+```rust
+pub struct WalletMetadata {
+    pub label: String,
+    pub description: String,
+}
+```
+
 ### Methods
 
 | Method | Args | Returns | Description |
 |---|---|---|---|
 | `initialize` | `owner: Address` | `Result<(), WalletRegistryError>` | Record the owner; must be called once before any other method. Owner auth required. |
-| `register_wallet` | `name: Symbol, wallet: Address` | `Result<(), WalletRegistryError>` | Register or overwrite the address stored under `name`. Owner auth required. |
+| `register_wallet` | `name: Symbol, wallet: Address` | `Result<(), WalletRegistryError>` | Register or overwrite the address stored under `name` (capped at `MAX_WALLETS`). Owner auth required. |
+| `register_wallet_with_metadata` | `name: Symbol, wallet: Address, label: String, description: String` | `Result<(), WalletRegistryError>` | Register or overwrite the address and attach descriptive metadata (capped at `MAX_WALLETS`). Owner auth required. |
 | `get_wallet` | `name: Symbol` | `Result<Address, WalletRegistryError>` | Return the address registered under `name`. No auth required. |
+| `get_metadata` | `name: Symbol` | `Result<WalletMetadata, WalletRegistryError>` | Return the metadata for a wallet registered via `register_wallet_with_metadata`. No auth required. |
+| `list_wallets` | — | `Vec<Symbol>` | Return all registered wallet names. No auth required. |
+
+### Events
+
+| Topic | Data | Condition |
+|---|---|---|
+| `init` | `owner: Address` | Contract initialized |
+| `wlt_reg` | `(name: Symbol, wallet: Address)` | `register_wallet` succeeds |
+| `wlt_meta` | `(name: Symbol, wallet: Address)` | `register_wallet_with_metadata` succeeds |
 
 ### Errors
 
@@ -408,7 +455,260 @@ caller.
 | `NotInitialized` | 1 | `initialize` has not been called; owner is unknown. |
 | `AlreadyInitialized` | 2 | `initialize` was called a second time on the same instance. |
 | `Unauthorized` | 3 | Reserved. Auth failures are surfaced as host errors by `Address::require_auth`. |
-| `WalletNotFound` | 4 | No wallet is registered under the requested name. |
+| `WalletNotFound` | 4 | No wallet (or no metadata) is registered under the requested name. |
+| `TooManyWallets` | 5 | Registry has reached `MAX_WALLETS` (128) |
+
+---
+
+## mux-registry
+
+Contract version registry. Tracks registered component names, their version
+strings, and optional full metadata. Capped at `MAX_CONTRACTS` entries.
+
+### Types
+
+```rust
+pub struct ContractMetadata {
+    pub version: String,
+    pub description: String,
+    pub author: String,
+    pub repository: String,
+}
+```
+
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `MAX_CONTRACTS` | 128 | Maximum registered contract names |
+| `TTL_THRESHOLD` | 17,280 | ~1 day — TTL extension trigger |
+| `TTL_EXTEND_TO` | 518,400 | ~30 days — TTL extended to |
+
+### Methods
+
+| Method | Args | Returns | Description |
+|---|---|---|---|
+| `initialize` | `admin: Address` | `Result<(), MuxRegistryError>` | Set admin; can only be called once |
+| `register` | `name: Symbol, version: String` | `Result<(), MuxRegistryError>` | Register or update a version (admin-only, capped at `MAX_CONTRACTS`) |
+| `register_with_metadata` | `name: Symbol, version: String, description: String, author: String, repository: String` | `Result<(), MuxRegistryError>` | Register or update with full metadata (admin-only, capped at `MAX_CONTRACTS`) |
+| `get_version` | `name: Symbol` | `Result<String, MuxRegistryError>` | Return the registered version string |
+| `check_version` | `name: Symbol` | `Result<String, MuxRegistryError>` | Dry-run version lookup; identical to `get_version` (no state mutation either way) |
+| `get_metadata` | `name: Symbol` | `Result<ContractMetadata, MuxRegistryError>` | Return the full metadata for a registered name |
+| `list_contracts` | — | `Vec<Symbol>` | Return all registered contract names |
+
+### Events
+
+| Topic | Data | Condition |
+|---|---|---|
+| `init` | `admin: Address` | Contract initialized |
+| `reg` | `(name: Symbol, version: String)` | `register` succeeds |
+| `regmeta` | `(name: Symbol, version: String)` | `register_with_metadata` succeeds |
+
+### Errors
+
+| Variant | Code | Description |
+|---|---|---|
+| `NotInitialized` | 1 | Contract not yet initialized |
+| `AlreadyInitialized` | 2 | `initialize` called more than once |
+| `Unauthorized` | 3 | Caller is not the admin |
+| `ContractNotFound` | 4 | No entry registered under the requested name |
+| `TooManyContracts` | 5 | Registry has reached `MAX_CONTRACTS` (128) |
+
+---
+
+## mux-recovery
+
+Guardian-initiated account recovery with a mandatory timelock. A guardian
+initiates recovery for a new owner; after `RECOVERY_TIMELOCK` ledgers elapse
+(and before `RECOVERY_EXPIRY`), any guardian may execute the transfer. The
+current owner may cancel at any time before execution, or approve immediately
+via `approve_recovery_admin` without waiting out the timelock.
+
+### Types
+
+```rust
+pub enum RecoveryStatus {
+    None,
+    Pending,
+    Executed,
+    Cancelled,
+}
+
+pub struct RecoveryRequest {
+    pub new_owner: Address,
+    pub initiated_at: u32,
+    pub executable_at: u32,
+    pub expires_at: u32,
+    pub status: RecoveryStatus,
+}
+```
+
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `RECOVERY_TIMELOCK` | 17,280 ledgers (~24h) | Minimum delay between `initiate_recovery` and `execute_recovery`. Stable ABI — encoded in `rec_init` event payloads. |
+| `RECOVERY_EXPIRY` | 120,960 ledgers (~7d) | Window after which a pending request is stale and may be overwritten by a new `initiate_recovery` call. Stable ABI. |
+| `MAX_GUARDIANS` | 16 | Maximum guardians per instance |
+| `TTL_THRESHOLD` | 17,280 | ~1 day — TTL extension trigger |
+| `TTL_EXTEND_TO` | 518,400 | ~30 days — TTL extended to |
+
+### Methods
+
+| Method | Args | Returns | Description |
+|---|---|---|---|
+| `initialize` | `owner: Address, guardians: Vec<Address>` | `Result<(), RecoveryError>` | Set owner and guardian set; can only be called once |
+| `initiate_recovery` | `guardian: Address, new_owner: Address` | `Result<(), RecoveryError>` | Guardian-authorized; rejects if a non-expired recovery is already pending |
+| `cancel_recovery` | — | `Result<(), RecoveryError>` | Owner-authorized; cancels a pending request at any time |
+| `execute_recovery` | `guardian: Address` | `Result<(), RecoveryError>` | Guardian-authorized; transfers ownership once `executable_at` has passed and before `expires_at` |
+| `approve_recovery_admin` | — | `Result<(), RecoveryError>` | Owner-authorized; immediately executes a pending recovery without waiting for the timelock |
+| `add_guardian` | `guardian: Address` | `Result<(), RecoveryError>` | Owner-authorized; capped at `MAX_GUARDIANS` |
+| `remove_guardian` | `guardian: Address` | `Result<(), RecoveryError>` | Owner-authorized; rejects if it would leave zero guardians |
+| `owner` | — | `Result<Address, RecoveryError>` | Return current owner |
+| `guardians` | — | `Result<Vec<Address>, RecoveryError>` | Return the guardian set |
+| `recovery_status` | — | `RecoveryStatus` | Return the current recovery lifecycle state (`None` if no request has ever been made) |
+| `recovery_request` | — | `Option<RecoveryRequest>` | Return the full recovery request record, or `None` |
+| `set_registry` | `owner: Address, registry_id: Address` | `Result<(), RecoveryError>` | Owner-authorized; link a registry contract address for off-chain discovery |
+| `registry_id` | — | `Option<Address>` | Return the linked registry address, or `None` if not set |
+
+### Events
+
+| Topic | Data | Condition |
+|---|---|---|
+| `init` | `owner: Address` | Contract initialized |
+| `rec_init` | `(guardian, new_owner, initiated_at, executable_at, expires_at)` | `initiate_recovery` succeeds |
+| `rec_exec` | `(guardian: Address, new_owner: Address)` | `execute_recovery` succeeds |
+| `rec_adm` | `new_owner: Address` | `approve_recovery_admin` succeeds |
+| `rec_cncl` | `()` | `cancel_recovery` succeeds |
+| `grd_add` | `guardian: Address` | `add_guardian` succeeds |
+| `grd_rm` | `guardian: Address` | `remove_guardian` succeeds |
+| `reg_link` | `registry_id: Address` | `set_registry` succeeds |
+
+### Errors
+
+| Variant | Code | Description |
+|---|---|---|
+| `NotInitialized` | 1 | Contract not yet initialized |
+| `AlreadyInitialized` | 2 | `initialize` called more than once |
+| `Unauthorized` | 3 | Caller is not a registered guardian |
+| `RecoveryAlreadyPending` | 4 | A non-expired recovery request already exists |
+| `NoActiveRecovery` | 5 | No pending recovery request exists |
+| `TimelockNotExpired` | 6 | `execute_recovery` called before `executable_at` |
+| `TooManyGuardians` | 7 | Guardian set has reached `MAX_GUARDIANS` (16) |
+| `GuardianAlreadyExists` | 8 | `add_guardian` called with an existing guardian |
+| `GuardianNotFound` | 9 | `remove_guardian` called with an address not in the set |
+| `MinGuardiansRequired` | 10 | `remove_guardian` would leave zero guardians |
+| `RecoveryExpired` | 11 | `execute_recovery` called after `expires_at` |
+
+---
+
+## mux-policy
+
+Per-wallet daily spend limit policy contract. The daily counter resets
+automatically once the configured `day_ledgers` window has elapsed.
+
+### Types
+
+```rust
+pub struct DailyLimit {
+    pub limit: i128,
+    pub spent: i128,
+    pub reset_ledger: u32,
+    pub day_ledgers: u32,
+    pub registry_id: Option<Address>,
+}
+```
+
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `MAX_WALLETS` | 256 | Maximum wallets with a configured limit |
+| `TTL_THRESHOLD` | 17,280 | ~1 day — TTL extension trigger |
+| `TTL_EXTEND_TO` | 518,400 | ~30 days — TTL extended to |
+
+### Methods
+
+| Method | Args | Returns | Description |
+|---|---|---|---|
+| `initialize` | `admin: Address` | `Result<(), MuxPolicyError>` | Set admin; can only be called once |
+| `upgrade` | `new_wasm_hash: BytesN<32>` | `Result<(), MuxPolicyError>` | Admin-authorized; upgrades the contract WASM via `update_current_contract_wasm` |
+| `set_daily_limit` | `wallet: Address, limit: i128, day_ledgers: u32, registry_id: Option<Address>` | `Result<(), MuxPolicyError>` | Admin-authorized; set/replace a wallet's daily limit (capped at `MAX_WALLETS`) |
+| `get_daily_limit` | `wallet: Address` | `Result<DailyLimit, MuxPolicyError>` | Return the current record, with `spent` reported as `0` if the day window has elapsed (does not persist the reset) |
+| `record_spend` | `wallet: Address, amount: i128` | `Result<(), MuxPolicyError>` | Wallet-authorized; resets the window if elapsed, then debits `amount` against the limit |
+| `reset_daily_counter` | `wallet: Address` | `Result<(), MuxPolicyError>` | Admin-authorized; manually resets `spent` to 0 and starts a fresh window |
+
+### Events
+
+| Topic | Data | Condition |
+|---|---|---|
+| `init` | `admin: Address` | Contract initialized |
+| `lmt_set` | `(wallet: Address, limit: i128, day_ledgers: u32)` | `set_daily_limit` succeeds |
+| `spent` | `(wallet: Address, amount: i128)` | `record_spend` succeeds |
+| `ctr_rst` | `wallet: Address` | `reset_daily_counter` succeeds |
+
+### Errors
+
+| Variant | Code | Description |
+|---|---|---|
+| `NotInitialized` | 1 | Contract not yet initialized |
+| `AlreadyInitialized` | 2 | `initialize` called more than once |
+| `Unauthorized` | 3 | Caller is not the admin |
+| `LimitNotFound` | 4 | No daily limit configured for the wallet |
+| `LimitExceeded` | 5 | Spend would exceed the daily limit |
+| `InvalidAmount` | 6 | Limit or spend amount is zero or negative |
+| `InvalidPeriod` | 7 | `day_ledgers` is zero |
+| `TooManyWallets` | 8 | Registry has reached `MAX_WALLETS` (256) |
+
+---
+
+## mux-delegation
+
+Scoped delegate permission management. An owner grants a named permission set
+(`Vec<Symbol>`) to a delegate address; granting again for the same
+`(owner, delegate)` pair fully replaces the prior set (no append mode).
+
+### Constants
+
+| Constant | Value | Description |
+|---|---|---|
+| `MAX_DELEGATE_PERMS` | 64 | Maximum permissions per `(owner, delegate)` pair |
+| `MAX_DELEGATES_PER_OWNER` | 128 | Maximum delegate addresses per owner |
+| `TTL_THRESHOLD` | 17,280 | ~1 day — TTL extension trigger |
+| `TTL_EXTEND_TO` | 518,400 | ~30 days — TTL extended to |
+
+### Methods
+
+| Method | Args | Returns | Description |
+|---|---|---|---|
+| `grant_delegate` | `owner: Address, delegate: Address, permissions: Vec<Symbol>` | `Result<(), MuxDelegationError>` | Owner-authorized; replaces any prior grant for the pair |
+| `revoke_delegate` | `owner: Address, delegate: Address` | `Result<(), MuxDelegationError>` | Owner-authorized; removes the grant and the delegate from the owner's list |
+| `get_delegate_permissions` | `owner: Address, delegate: Address` | `Vec<Symbol>` | Return granted permissions, or an empty vec if no grant exists |
+| `is_delegate` | `owner: Address, delegate: Address, permission: Symbol` | `bool` | Return whether `permission` is granted to `delegate` |
+| `get_delegates` | `owner: Address` | `Vec<Address>` | Return all delegate addresses registered under `owner` |
+| `check_delegate` | `owner: Address, delegate: Address, permission: Symbol` | `Result<(), MuxDelegationError>` | Read-only; `Ok(())` if granted, `Err(NotADelegate)` otherwise |
+| `link_contract_id` | `admin: Address, contract_id: Address` | `Result<(), MuxDelegationError>` | Admin-authorized; write-once storage of this contract's own address for registry discovery |
+| `get_contract_id` | — | `Option<Address>` | Return the linked contract address, or `None` if not yet set |
+
+### Events
+
+| Topic | Data | Condition |
+|---|---|---|
+| `dlg_grant` | `(owner: Address, delegate: Address)` | `grant_delegate` succeeds |
+| `dlg_rev` | `(owner: Address, delegate: Address)` | `revoke_delegate` succeeds |
+| `dlg_link` | `(admin: Address, contract_id: Address)` | `link_contract_id` succeeds |
+
+### Errors
+
+Error codes 6001–6005 are stable ABI — coordinate changes with a registry version bump.
+
+| Variant | Code | Description |
+|---|---|---|
+| `NotADelegate` | 6001 | No grant exists for the `(owner, delegate)` pair |
+| `TooManyPermissions` | 6002 | `permissions` exceeds `MAX_DELEGATE_PERMS` (64) |
+| `EmptyPermissions` | 6003 | `permissions` is empty |
+| `TooManyDelegates` | 6004 | Owner has reached `MAX_DELEGATES_PER_OWNER` (128) |
+| `ContractIdAlreadySet` | 6005 | `link_contract_id` called after the address was already set |
 
 ---
 

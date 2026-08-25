@@ -15,7 +15,9 @@ extend instance-storage TTL.
 | `set_spend_limit` | stored owner |
 | `debit_spend` | current contract address |
 | `set_metadata` | stored owner |
-| `execute_with_session` | Not yet enforced; registry integration is pending |
+| `register_session_key` | stored owner |
+| `revoke_session_key` | stored owner |
+| `execute_with_session` | authorized session key (`session_key.require_auth()`); payload dispatch itself is not yet implemented |
 | Read-only entrypoints | none |
 
 Owner-only calls fail with a host authorization error when the signature is
@@ -34,15 +36,17 @@ missing. Contract validation failures use `MuxAccountError`.
 
 ### Delegates
 
-- `set_delegate(delegate, expiry_ledger, can_spend) -> Result<(), MuxAccountError>`
-  inserts or updates a delegate. New entries are capped at 64.
+- `set_delegate(delegate, expires_at, can_spend) -> Result<(), MuxAccountError>`
+  inserts or updates a delegate. New entries are capped at 64. `expires_at` is
+  a Unix timestamp (`env.ledger().timestamp()`), not a ledger sequence.
 - `remove_delegate(delegate) -> Result<(), MuxAccountError>` removes an entry.
 - `delegates() -> Result<Map<Address, DelegateInfo>, MuxAccountError>` returns
-  only delegates whose expiry ledger is still in the future.
+  only delegates whose `expires_at` timestamp is still in the future.
 - `get_delegate(delegate) -> Result<DelegateInfo, MuxAccountError>` returns one
   active delegate, or `DelegateNotFound` / `DelegateExpired`.
 
-`DelegateInfo` contains `address`, `expiry_ledger`, and `can_spend`.
+`DelegateInfo` contains `address`, `expires_at` (Unix timestamp, `u64`), and
+`can_spend`.
 
 ### Spend limits
 
@@ -57,9 +61,19 @@ missing. Contract validation failures use `MuxAccountError`.
 
 ### Sessions and metadata
 
+- `register_session_key(session_key, expires_at, scopes) -> Result<(), MuxAccountError>`
+  registers or replaces a session key with a Unix-timestamp expiry and a set
+  of `Scope` capabilities. New keys are capped at `MAX_SESSION_KEYS` (32) per
+  owner.
+- `revoke_session_key(session_key) -> Result<(), MuxAccountError>` marks a
+  registered session key as revoked.
 - `execute_with_session(session_key, payload) -> Result<Bytes, MuxAccountError>`
-  currently emits an execution audit event and returns empty bytes. Session
-  registry validation and payload dispatch remain pending.
+  validates that `session_key` is authorized, registered, non-revoked, and
+  non-expired, then emits an execution audit event and returns empty bytes.
+  It does not decode or dispatch `payload` — the `scopes` on the session
+  record are stored but not enforced here. See
+  [aa_sequence_diagram.md](aa_sequence_diagram.md) for the gap between this
+  and the intended account-abstraction execution flow.
 - `set_metadata(meta) -> Result<(), MuxAccountError>` stores owner-controlled
   `RegistryMeta`.
 - `get_metadata() -> Option<RegistryMeta>` returns metadata when present.

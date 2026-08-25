@@ -41,6 +41,10 @@ Contract tag: `mux_acct`
 | `lmt_set` | `set_spend_limit` succeeds | `(asset: Address, amount: i128, period_ledgers: u32)` |
 | `debited` | `debit_spend` succeeds | `(asset: Address, spend: i128)` |
 | `ses_exe` | `execute_with_session` succeeds | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` |
+| `meta_set` | `set_metadata` succeeds | `name: String` (from the `RegistryMeta` argument) |
+
+> `register_session_key` and `revoke_session_key` do not currently emit
+> dedicated audit events.
 
 ---
 
@@ -118,6 +122,13 @@ Contract tag: `mux_perm`
 | `adm_prp` | `propose_admin` adds a new candidate | `new_admin: Address` |
 | `adm_apr` | `approve_admin` records an approval (threshold not yet reached) | `(approver: Address, new_admin: Address)` |
 | `adm_prm` | `approve_admin` promotes a candidate (threshold reached) | `new_admin: Address` |
+| `perm_ok` | `has_permission` returns `true` | `(account: Address, permission: Symbol)` |
+| `perm_den` | `has_permission` returns `false` | `(account: Address, permission: Symbol)` |
+| `meta_set` | `set_metadata` succeeds | `name: String` (from the `RegistryMeta` argument) |
+
+> Unlike every other event in this table, `perm_ok`/`perm_den` are emitted by
+> a read-only query (`has_permission`), not a state-mutating call — every
+> permission check is itself audit-logged.
 
 > `upgrade` emits no event — instance storage (including this event log's
 > continuity) survives the WASM replace, so there is nothing new to log; the
@@ -138,6 +149,7 @@ Contract tag: `mux_dlg`
 | `dlg_link` | `link_contract_id` succeeds | `(admin: Address, contract_id: Address)` |
 
 Events are emitted only on success. Failed calls (auth failure, empty
+permissions, cap exceeded, already-linked contract ID) emit no events.
 permissions, cap exceeded) emit no events. `upgrade` emits no event — see
 the note under mux-permissions above; the same convention applies here.
 
@@ -191,6 +203,14 @@ Contract tag: `mux_bat`
 
 | Action | Trigger | Data payload |
 |---|---|---|
+| `bat_start` | `execute_batch` begins, before any operation runs | `(caller: Address, op_count: u32)` |
+| `executed` | `execute_batch` completes (success or partial failure) | `(caller: Address, success_count: u32, failure_count: u32)` |
+| `bat_ok` | `execute_batch` completes with zero failures | `(caller: Address, success_count: u32)` |
+| `bat_abort` | A `require_success=true` operation fails | `caller: Address` |
+| `sim_done` | `simulate_batch` completes successfully | `(caller: Address, success_count: u32)` |
+
+> `simulate_batch` emits `sim_done` but writes no state and calls no target
+> contracts — it is a dry-run, not an execution.
 | `init` | `initialize` succeeds | `admin: Address` |
 | `bat_start` | `execute_batch` starts, after size checks pass | `(caller: Address, op_count: u32)` |
 | `executed` | `execute_batch` completes (success or partial failure) | `(caller: Address, success_count: u32, failure_count: u32)` |
@@ -229,8 +249,68 @@ Contract tag: `mux_wreg`
 |---|---|---|
 | `init` | `initialize` succeeds | `owner: Address` |
 | `wlt_reg` | `register_wallet` succeeds (new entry or overwrite) | `(name: Symbol, wallet: Address)` |
+| `wlt_meta` | `register_wallet_with_metadata` succeeds (new entry or overwrite) | `(name: Symbol, wallet: Address)` |
 
-> `get_wallet` is read-only and emits no events.
+> `get_wallet`, `get_metadata`, and `list_wallets` are read-only and emit no events.
+
+---
+
+## mux-registry events
+
+Contract tag: `mux_reg`
+
+| Action | Trigger | Data payload |
+|---|---|---|
+| `init` | `initialize` succeeds | `admin: Address` |
+| `reg` | `register` succeeds (new entry or version update) | `(name: Symbol, version: String)` |
+| `regmeta` | `register_with_metadata` succeeds (new entry or update) | `(name: Symbol, version: String)` |
+
+> `get_version`, `check_version`, `get_metadata`, and `list_contracts` are
+> read-only and emit no events.
+
+---
+
+## mux-recovery events
+
+Contract tag: `mux_recv`
+
+| Action | Trigger | Data payload |
+|---|---|---|
+| `init` | `initialize` succeeds | `owner: Address` |
+| `rec_init` | `initiate_recovery` succeeds | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
+| `rec_exec` | `execute_recovery` succeeds | `(guardian: Address, new_owner: Address)` |
+| `rec_adm` | `approve_recovery_admin` succeeds | `new_owner: Address` |
+| `rec_cncl` | `cancel_recovery` succeeds | `()` |
+| `grd_add` | `add_guardian` succeeds | `guardian: Address` |
+| `grd_rm` | `remove_guardian` succeeds | `guardian: Address` |
+| `reg_link` | `set_registry` succeeds | `registry_id: Address` |
+
+> The `rec_init` payload carries the full timelock window
+> (`initiated_at`/`executable_at`/`expires_at`) so indexers can compute
+> deadlines without a follow-up storage read. `RECOVERY_TIMELOCK` (17,280
+> ledgers ≈ 24h) and `RECOVERY_EXPIRY` (120,960 ledgers ≈ 7d) are stable ABI
+> — see [`docs/recovery-trust-model.md`](recovery-trust-model.md).
+> `owner`, `guardians`, `recovery_status`, `recovery_request`, and
+> `registry_id` are read-only and emit no events.
+
+---
+
+## mux-policy events
+
+Contract tag: `mux_pol`
+
+| Action | Trigger | Data payload |
+|---|---|---|
+| `init` | `initialize` succeeds | `admin: Address` |
+| `lmt_set` | `set_daily_limit` succeeds | `(wallet: Address, limit: i128, day_ledgers: u32)` |
+| `spent` | `record_spend` succeeds | `(wallet: Address, amount: i128)` |
+| `ctr_rst` | `reset_daily_counter` succeeds | `wallet: Address` |
+
+> `get_daily_limit` is read-only and emits no events; note it reports
+> `spent` as reset to `0` once the day window has elapsed without
+> persisting that reset (only `record_spend` and `reset_daily_counter`
+> actually write the reset). `upgrade` extends TTL but does not emit an
+> audit event of its own.
 
 ---
 
