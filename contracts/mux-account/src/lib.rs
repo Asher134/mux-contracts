@@ -237,10 +237,17 @@ impl MuxAccount {
         // Reclaim expired entries before applying the cap. This keeps storage
         // bounded without allowing stale delegates to permanently exhaust it.
         if !delegates.contains_key(delegate.clone()) {
-            let current_ledger = env.ledger().sequence();
+            // `expires_at` on `DelegateInfo` is a Unix timestamp (see its
+            // doc comment and the `delegates()` query below), not a ledger
+            // sequence number — compare against `ledger().timestamp()` to
+            // match. Comparing against `ledger().sequence()` here was a
+            // pre-existing bug: it both failed to compile (u32 vs u64) and,
+            // once coerced, would have compared two numbers on unrelated
+            // scales, so expired delegates were never actually reclaimed.
+            let now = env.ledger().timestamp();
             let mut expired = Vec::new(&env);
             for (address, info) in delegates.iter() {
-                if Self::is_delegate_expired(&info, current_ledger) {
+                if Self::is_delegate_expired(&info, now) {
                     expired.push_back(address);
                 }
             }
