@@ -30,13 +30,24 @@ Ensure you have the following installed:
 
 4. **Coverage (optional)**
    ```bash
-   make coverage
-   # or stub-only (no instrumented test run):
+   # Install cargo-llvm-cov once (bundles its own llvm tools):
+   cargo install cargo-llvm-cov --locked
+   rustup component add llvm-tools-preview
+
+   make coverage          # summary to stdout
+   make coverage-ci       # LCOV output to coverage/lcov.info (same as CI)
+
+   # Or via the script directly:
+   bash scripts/coverage.sh --html --open   # HTML report
+   bash scripts/coverage.sh --lcov          # LCOV for upload
+
+   # Stub-only (no instrumented test run; for script validation):
    bash scripts/coverage.sh --stub
    bash scripts/test-coverage.sh
    ```
-   Install `llvm-tools-preview` for HTML/LCOV output; otherwise the script prints a
-   coverage report stub listing workspace crates.
+   Without `cargo-llvm-cov` the script prints a coverage report stub listing
+   workspace crates and exits 0 so local dev machines without the tooling are
+   not blocked.
 
 ## Cargo.lock
 

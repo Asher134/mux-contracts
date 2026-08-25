@@ -11,7 +11,8 @@ Step-by-step checklist for safe Mux Protocol contract deployments to Stellar Mai
 - [ ] Security audit complete and all critical/high findings resolved
 - [ ] Audit report reviewed and sign-off obtained from lead engineer
 - [ ] All contract changes since last audit reviewed for new risk surface
-- [ ] Dependency versions pinned in `Cargo.lock` and reviewed for known CVEs (`cargo deny check`)
+- [ ] Dependency versions pinned in `Cargo.lock` and reviewed for known CVEs  
+      (`cargo deny check` via `make deny` or the `deny` CI job — must pass before deploy)
 
 ### Testnet Verification
 

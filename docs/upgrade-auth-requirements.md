@@ -85,7 +85,9 @@ fn require_admin(env: &Env) -> Result<(), ContractError> {
 
 Before every production upgrade:
 
-- [ ] New WASM hash verified against source commit (run `scripts/verify-wasm-hash.sh`)
+- [ ] New WASM hash verified against source commit  
+      CI publishes `wasm-hashes.txt` as an artifact on every build — download it and confirm  
+      the hash matches your local build: `bash scripts/verify-wasm-hash.sh <wasm> <hash>`
 - [ ] All existing tests pass against the new WASM
 - [ ] Storage layout changes are backward-compatible or a `migrate()` function is ready
 - [ ] Testnet upgrade completed and smoke-tested

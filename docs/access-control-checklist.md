@@ -218,7 +218,15 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 - [ ] `cargo fmt --check` passes.
 - [ ] Bindings drift check (`check-binding-drift` job) passes on PRs.
 - [ ] Release builds use `[profile.release]` with `overflow-checks = true` and `panic = "abort"`.
-- [ ] WASM artifacts are uploaded and SHA-256 is published in the release notes.
+- [ ] WASM artifacts are uploaded and SHA-256 is published as the `wasm-hashes` artifact  
+      (CI job `rust` step **Compute WASM hashes** / **Upload WASM hashes artifact** — #664).
+- [ ] `cargo deny check` passes — supply-chain license and advisory policy in `deny.toml`  
+      (CI job `deny` — #661; also `make deny` locally).
+- [ ] No `testutils` string in release WASMs — CI job `rust` step **check-no-testutils** and  
+      standalone job `check-no-testutils` both pass (#663; also `make check-no-testutils`).
+- [ ] Coverage job (`coverage`) runs `cargo-llvm-cov` and emits `coverage/lcov.info` (#662).
+- [ ] All four new CI jobs (`deny`, `check-no-testutils`, `verify-wasm-hash`, `coverage`) are  
+      green before a mainnet deploy is approved.
 
 ---
 
