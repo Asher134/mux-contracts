@@ -16,8 +16,13 @@ This repository contains the **core Soroban smart contracts** that power Mux. Co
 | [`contracts/mux-account`](contracts/mux-account/) | Account abstraction: owner, delegates, spend limits, guardian set |
 | [`contracts/mux-account-factory`](contracts/mux-account-factory/) | Factory for deploying and registering account instances with metadata |
 | [`contracts/mux-batcher`](contracts/mux-batcher/) | Atomic multi-operation batching with optional per-op failure handling |
+| [`contracts/mux-delegation`](contracts/mux-delegation/) | Scoped delegate permission management — grant/revoke named permissions per (owner, delegate) pair |
 | [`contracts/mux-permissions`](contracts/mux-permissions/) | RBAC registry — roles, permissions, grant/revoke |
-| [`contracts/mux-spending-policy`](contracts/mux-spending-policy/) | Spend-limit policy contract — set policies, retrieve them, and check spends |
+| [`contracts/mux-policy`](contracts/mux-policy/) | Per-wallet daily spend-limit policy with automatic window reset |
+| [`contracts/mux-recovery`](contracts/mux-recovery/) | Guardian-initiated account recovery with mandatory 24-hour timelock |
+| [`contracts/mux-registry`](contracts/mux-registry/) | Contract version and metadata registry — tracks deployed crate names and versions |
+| [`contracts/mux-spending-policy`](contracts/mux-spending-policy/) | Per-account/per-asset spend-limit policy and validation |
+| [`contracts/mux-wallet-registry`](contracts/mux-wallet-registry/) | Named wallet address registry — register and look up wallet addresses by symbolic name |
 
 ## TypeScript Bindings
 
@@ -380,6 +385,7 @@ See the [Deploying Contracts](#deploying-contracts) section above for the full d
 - [External Audit Prep](docs/audit-prep.md) — scope, entry points, known limitations, auditor checklist
 - [Error Codes Reference](docs/error_codes.md) — all contract error codes and HTTP mappings
 - [Bindings Error Mapping](docs/bindings-error-mapping.md) — how Rust error enums flow to TS unions and HTTP statuses
+- [Registry Contracts Comparison](docs/registry-contracts-comparison.md) — mux-registry vs mux-wallet-registry: purpose, error codes, auth models, and storage layouts
 
 ## Security
 

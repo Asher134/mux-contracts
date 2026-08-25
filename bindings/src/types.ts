@@ -64,7 +64,12 @@ export type MuxRecoveryError =
   | "Unauthorized"
   | "RecoveryAlreadyPending"
   | "NoActiveRecovery"
-  | "TimelockNotExpired";
+  | "TimelockNotExpired"
+  | "TooManyGuardians"
+  | "GuardianAlreadyExists"
+  | "GuardianNotFound"
+  | "MinGuardiansRequired"
+  | "RecoveryExpired";
 
 // ── Recovery timelock constants ───────────────────────────────────────────────
 
@@ -173,7 +178,10 @@ export type MuxDelegationError =
   | "NotADelegate"
   | "TooManyPermissions"
   | "EmptyPermissions"
-  | "TooManyDelegates";
+  | "TooManyDelegates"
+  | "ContractIdAlreadySet"
+  | "NotInitialized"
+  | "AlreadyInitialized";
 
 /**
  * Maps a `MuxDelegationError` variant or its raw `u32` contract error code to
@@ -201,6 +209,9 @@ export function muxDelegationErrorMessage(
     6002: "permission list exceeds the 64-entry cap",
     6003: "permission list is empty; at least one permission is required",
     6004: "owner already has 128 delegates registered",
+    6005: "contract address has already been linked; link_contract_id is write-once",
+    6006: "upgrade called before initialize; no admin to authorise it",
+    6007: "initialize called more than once",
   };
 
   const nameMap: Record<MuxDelegationError, number> = {
@@ -208,6 +219,9 @@ export function muxDelegationErrorMessage(
     TooManyPermissions: 6002,
     EmptyPermissions: 6003,
     TooManyDelegates: 6004,
+    ContractIdAlreadySet: 6005,
+    NotInitialized: 6006,
+    AlreadyInitialized: 6007,
   };
 
   const code =
@@ -268,6 +282,135 @@ export function muxPermissionsErrorMessage(
     TooManyRoles: 8,
     AdminNotFound: 9,
     AlreadyApproved: 10,
+  };
+
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
+  return codeMap[code] ?? "unknown error code";
+}
+
+/**
+ * Maps a `MuxRecoveryError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `RecoveryError` enum in
+ * `contracts/mux-recovery/src/lib.rs`.
+ *
+ * @example
+ * ```ts
+ * import { muxRecoveryErrorMessage } from "./types";
+ * console.log(muxRecoveryErrorMessage("TooManyGuardians")); // "guardian cap (16) reached"
+ * console.log(muxRecoveryErrorMessage(7));                  // "guardian cap (16) reached"
+ * ```
+ */
+export function muxRecoveryErrorMessage(
+  error: MuxRecoveryError | number,
+): string {
+  const codeMap: Record<number, string> = {
+    1: "contract not initialized",
+    2: "contract already initialized",
+    3: "caller is not authorized",
+    4: "a recovery request is already pending for this account",
+    5: "no active recovery request found",
+    6: "recovery timelock has not yet elapsed",
+    7: "guardian cap (16) reached",
+    8: "address is already a registered guardian",
+    9: "address is not a registered guardian",
+    10: "cannot remove the last remaining guardian",
+    11: "recovery execution window has elapsed",
+  };
+
+  const nameMap: Record<MuxRecoveryError, number> = {
+    NotInitialized: 1,
+    AlreadyInitialized: 2,
+    Unauthorized: 3,
+    RecoveryAlreadyPending: 4,
+    NoActiveRecovery: 5,
+    TimelockNotExpired: 6,
+    TooManyGuardians: 7,
+    GuardianAlreadyExists: 8,
+    GuardianNotFound: 9,
+    MinGuardiansRequired: 10,
+    RecoveryExpired: 11,
+  };
+
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
+  return codeMap[code] ?? "unknown error code";
+}
+
+/**
+ * Maps a `MuxPolicyError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `MuxPolicyError` enum in
+ * `contracts/mux-policy/src/lib.rs`.
+ *
+ * @example
+ * ```ts
+ * import { muxPolicyErrorMessage } from "./types";
+ * console.log(muxPolicyErrorMessage("LimitExceeded")); // "spend would exceed the daily limit"
+ * console.log(muxPolicyErrorMessage(5));               // "spend would exceed the daily limit"
+ * ```
+ */
+export function muxPolicyErrorMessage(
+  error: MuxPolicyError | number,
+): string {
+  const codeMap: Record<number, string> = {
+    1: "contract not initialized",
+    2: "contract already initialized",
+    3: "caller is not authorized",
+    4: "no daily limit configured for the wallet",
+    5: "spend would exceed the daily limit",
+    6: "amount is zero or negative",
+    7: "day_ledgers is zero",
+    8: "wallet cap (256) reached",
+  };
+
+  const nameMap: Record<MuxPolicyError, number> = {
+    NotInitialized: 1,
+    AlreadyInitialized: 2,
+    Unauthorized: 3,
+    LimitNotFound: 4,
+    LimitExceeded: 5,
+    InvalidAmount: 6,
+    InvalidPeriod: 7,
+    TooManyWallets: 8,
+  };
+
+  const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
+  return codeMap[code] ?? "unknown error code";
+}
+
+/**
+ * Maps a `MuxRegistryError` variant or its raw `u32` contract error code to
+ * a human-readable description.
+ *
+ * Mirrors the on-chain `MuxRegistryError` enum in
+ * `contracts/mux-registry/src/lib.rs`.
+ *
+ * @example
+ * ```ts
+ * import { muxRegistryErrorMessage } from "./types";
+ * console.log(muxRegistryErrorMessage("ContractNotFound")); // "no contract registered under the given name"
+ * console.log(muxRegistryErrorMessage(4));                  // "no contract registered under the given name"
+ * ```
+ */
+export function muxRegistryErrorMessage(
+  error: "NotInitialized" | "AlreadyInitialized" | "Unauthorized" | "ContractNotFound" | "TooManyContracts" | number,
+): string {
+  const codeMap: Record<number, string> = {
+    1: "contract not initialized",
+    2: "contract already initialized",
+    3: "caller is not authorized",
+    4: "no contract registered under the given name",
+    5: "registry cap (128) reached",
+  };
+
+  const nameMap: Record<string, number> = {
+    NotInitialized: 1,
+    AlreadyInitialized: 2,
+    Unauthorized: 3,
+    ContractNotFound: 4,
+    TooManyContracts: 5,
   };
 
   const code = typeof error === "number" ? error : (nameMap[error] ?? -1);
@@ -374,7 +517,8 @@ export type MuxPolicyError =
   | "LimitNotFound"
   | "LimitExceeded"
   | "InvalidAmount"
-  | "InvalidPeriod";
+  | "InvalidPeriod"
+  | "TooManyWallets";
 
 export type SpendingPolicyError =
   | "NotInitialized"

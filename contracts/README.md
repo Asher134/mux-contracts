@@ -24,6 +24,14 @@ crate compiles to a WASM module deployable on Stellar.
 |---|---|
 | [`soroban-test-helpers`](soroban-test-helpers/) | Shared mock environment and test utilities (not compiled to WASM) |
 
+> **Note — two registry crates:** `mux-registry` and `mux-wallet-registry`
+> both ship WASM and share the "registry" naming, but serve different purposes:
+> `mux-registry` tracks deployed contract versions (protocol infra); `mux-wallet-registry`
+> maps symbolic names to wallet addresses (application layer). See
+> [`docs/registry-contracts-comparison.md`](../docs/registry-contracts-comparison.md)
+> for a full side-by-side comparison including error codes, auth models, and
+> storage layouts.
+
 ## Quick Reference
 
 ### Build
