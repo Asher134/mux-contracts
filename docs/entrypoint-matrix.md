@@ -56,6 +56,8 @@ by a specific actor; public entrypoints are callable by anyone.
 
 | Entrypoint | Auth | Notes |
 |---|---|---|
+| `initialize(admin)` | A | Optional, one-time; sets the upgrade admin only — batching works without it |
+| `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
 | `execute_batch(caller, ops)` | U | Caller authorizes; reentrancy guard |
 | `submit_batch(ops)` | U | Delegates to `execute_batch` |
 | `estimate_fees(op_count)` | P | Pure computation |
@@ -69,12 +71,16 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `grant_delegate(owner, delegate, perms)` | U | Owner authorizes; capped at `MAX_DELEGATE_PERMS` / `MAX_DELEGATES_PER_OWNER` |
+| `initialize(admin)` | A | Optional, one-time; sets the upgrade admin only — delegation grants work without it |
+| `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
+| `grant_delegate(owner, delegate, perms)` | U | Owner authorizes |
 | `revoke_delegate(owner, delegate)` | U | Owner authorizes |
 | `get_delegate_permissions(owner, delegate)` | P | Read-only |
 | `is_delegate(owner, delegate, perm)` | P | Read-only |
 | `get_delegates(owner)` | P | Read-only |
 | `check_delegate(owner, delegate, perm)` | P | Read-only; `Ok(())`/`Err(NotADelegate)` variant of `is_delegate` |
 | `link_contract_id(admin, contract_id)` | A | Admin authorizes; write-once |
+| `link_contract_id(admin, contract_id)` | U | Caller-supplied `admin` param authorizes itself; **not** the same identity as the stored upgrade admin — see [delegation-upgrade.md](delegation-upgrade.md) |
 | `get_contract_id()` | P | Read-only |
 
 ## mux-permissions
@@ -82,6 +88,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(admin)` | A | One-time setup |
+| `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
 | `create_role(role, perms)` | A | Admin only |
 | `grant_role(account, role)` | A | Admin only |
 | `revoke_role(account, role)` | A | Admin only |

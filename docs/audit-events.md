@@ -130,6 +130,11 @@ Contract tag: `mux_perm`
 > a read-only query (`has_permission`), not a state-mutating call — every
 > permission check is itself audit-logged.
 
+> `upgrade` emits no event — instance storage (including this event log's
+> continuity) survives the WASM replace, so there is nothing new to log; the
+> upload/invoke transaction itself is the audit record. Follows the same
+> convention as `mux-policy`'s `upgrade`.
+
 ---
 
 ## mux-delegation events
@@ -138,12 +143,20 @@ Contract tag: `mux_dlg`
 
 | Action | Trigger | Data payload |
 |---|---|---|
+| `init` | `initialize` succeeds | `admin: Address` |
 | `dlg_grant` | `grant_delegate` succeeds | `(owner: Address, delegate: Address)` |
 | `dlg_rev` | `revoke_delegate` succeeds | `(owner: Address, delegate: Address)` |
 | `dlg_link` | `link_contract_id` succeeds | `(admin: Address, contract_id: Address)` |
 
 Events are emitted only on success. Failed calls (auth failure, empty
 permissions, cap exceeded, already-linked contract ID) emit no events.
+permissions, cap exceeded) emit no events. `upgrade` emits no event — see
+the note under mux-permissions above; the same convention applies here.
+
+> **Note:** `initialize` is optional and only establishes the `upgrade()`
+> admin — it is independent of the `admin` parameter accepted by
+> `link_contract_id`, which authorises itself and is not checked against the
+> stored admin. See [delegation-upgrade.md](delegation-upgrade.md).
 
 > **Note:** The event data carries only `(owner, delegate)`. The full
 > permission list granted/revoked is **not** included in the event — retrieve
@@ -198,6 +211,18 @@ Contract tag: `mux_bat`
 
 > `simulate_batch` emits `sim_done` but writes no state and calls no target
 > contracts — it is a dry-run, not an execution.
+| `init` | `initialize` succeeds | `admin: Address` |
+| `bat_start` | `execute_batch` starts, after size checks pass | `(caller: Address, op_count: u32)` |
+| `executed` | `execute_batch` completes (success or partial failure) | `(caller: Address, success_count: u32, failure_count: u32)` |
+| `bat_ok` | `execute_batch` completes with zero failures | `(caller: Address, success_count: u32)` |
+| `bat_abort` | `execute_batch` aborts on a required-operation failure | `caller: Address` |
+| `sim_done` | `simulate_batch` completes | `(caller: Address, success_count: u32)` |
+
+> `simulate_batch` writes no state but does emit `sim_done` for off-chain
+> observability. `upgrade` emits no event — see the note under
+> mux-permissions above; the same convention applies here. `initialize` is
+> optional and only establishes the `upgrade()` admin — batching itself
+> never required one.
 
 ---
 
