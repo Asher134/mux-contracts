@@ -25,7 +25,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | `initialize(owner, guardians)` | A | One-time setup; owner authorizes |
 | `unpause()` | A | Owner only |
 | `is_paused()` | P | Read-only |
-| `set_delegate(delegate, expires_at, can_spend)` | A | Owner only; paused check |
+| `set_delegate(delegate, expires_at, can_spend)` | A | Owner only; paused check; `expires_at` is a Unix timestamp |
 | `remove_delegate(delegate)` | A | Owner only; paused check |
 | `set_spend_limit(asset, amount, period)` | A | Owner only; paused check |
 | `debit_spend(asset, spend)` | U | Caller (contract) authorizes; paused check; reentrancy guard |
