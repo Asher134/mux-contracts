@@ -136,8 +136,13 @@ An optional registry contract address (`registry_id`) can be associated with the
 - The field is stored under `DataKey::RegistryId` in instance storage.
 - Reading `registry_id()` returns `Option<Address>` — `None` if not set.
 - Setting the registry requires the current **owner's authorization** (`owner.require_auth()`).
-- A `reg_link` audit event is emitted each time the registry address is written, providing a full on-chain audit trail of any registry re-links.
-- The stored address is informational: the contract does **not** call the registry at link time. Off-chain tooling should cross-check that the registry contract at that address contains the expected metadata for this recovery deployment.
+- **On-chain validation (fail-closed):** `set_registry` calls `list_contracts` on the supplied
+  registry address via `try_invoke_contract`. If that call fails (the address is not a deployed
+  mux-registry contract, or the registry is uninitialised), `set_registry` returns
+  `RegistryNotFound` and the address is **not** stored. This prevents stale or spoofed registry
+  links from being silently accepted.
+- A `reg_link` audit event is emitted each time a valid registry address is written, providing a
+  full on-chain audit trail of any registry re-links.
 - TypeScript binding methods: `setRegistry(sourceKeypair, owner, registryId)` and `getRegistryId(sourceKeypair)`.
 
 ### 4.7 Recovery request struct query
@@ -169,7 +174,7 @@ This entrypoint is read-only (no event emitted) and is designed primarily for of
 | Attacker spams recovery requests | Only one Pending request allowed; each requires guardian auth |
 | Replay of old recovery request | Each request stores `initiated_at`; executed/cancelled requests cannot be re-executed |
 | Owner tries to remove guardians | Guardian set is immutable after `initialize` |
-| Malicious registry link | `set_registry` requires owner auth; `reg_link` event provides on-chain audit trail |
+| Malicious registry link | `set_registry` requires owner auth; performs live cross-contract validation against the registry before storing the link; `reg_link` event provides on-chain audit trail |
 
 ---
 
@@ -179,7 +184,8 @@ This entrypoint is read-only (no event emitted) and is designed primarily for of
 - **Single-signer guardian model.** Each guardian acts fully independently — there is no on-chain threshold. Any single guardian can both initiate and execute recovery without co-signing from other guardians. This increases the blast radius of a single compromised guardian key. Planned improvement: require a configurable M-of-N quorum.
 - **Immutable guardian set.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
 - **No guardian liveness check.** If all guardians lose their keys, recovery is impossible.
-- **No on-chain registry validation.** The `registry_id` field stores an address but does not call the registry at initialization time. Off-chain tooling must verify the link is correct and that the registry entry matches the deployed contract.
+  See [§8 Guardian Liveness and Last-Resort Recovery](#8-guardian-liveness-and-last-resort-recovery)
+  for operational guidance and recommended mitigations.
 
 ---
 
