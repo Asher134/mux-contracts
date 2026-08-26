@@ -20,6 +20,11 @@ by a specific actor; public entrypoints are callable by anyone.
 
 ## mux-account
 
+> **Immutable by design** — `mux-account` has no `upgrade()` entry point and none will be added.
+> Immutability is a user trust guarantee for core account-abstraction logic.
+> Migration means deploying a new instance; see
+> [account-upgrade-migration.md](account-upgrade-migration.md).
+
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(owner, guardians)` | A | One-time setup; owner authorizes |
