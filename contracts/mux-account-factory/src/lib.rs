@@ -1318,6 +1318,28 @@ mod tests {
         assert_eq!(client.account_count(), u64::from(MAX_ACCOUNTS_PER_OWNER));
     }
 
+    // ── no WASM/interface validation on registration (#652, by design) ───────
+    //
+    // Per docs/account-factory-flow.md "Integration with mux-account", the
+    // factory is intentionally decoupled from mux-account at the contract
+    // level — it stores an address but never calls into it, so it cannot
+    // verify account_address is a deployed mux-account instance. This test
+    // locks in that documented behaviour: an arbitrary address that is not a
+    // mux-account (or any contract at all) is still accepted.
+
+    #[test]
+    fn test_deploy_account_accepts_address_with_no_code_hash_validation() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        // Address::generate produces a plain account-style address, not a
+        // deployed contract — the factory does not distinguish it from a
+        // real mux-account instance.
+        let arbitrary_address = Address::generate(&env);
+        let deployed = client.deploy_account(&owner, &arbitrary_address);
+        assert_eq!(deployed, arbitrary_address);
+        assert_eq!(client.get_accounts(&owner).get(0).unwrap(), arbitrary_address);
+    }
+
     // ── cap is per-owner, not global ──────────────────────────────────────────
 
     /// Filling one owner's cap must not affect a second owner's ability to
