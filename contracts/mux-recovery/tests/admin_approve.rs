@@ -18,7 +18,10 @@ fn test_owner_and_guardian_approve_recovery_executes() {
     let guardian = Address::generate(&env);
     let new_owner = Address::generate(&env);
 
-    client.initialize(&owner, &vec![&env, guardian.clone()]);
+    // initialize contract with owner and one guardian
+    client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
+
+    // guardian initiates recovery
     client.initiate_recovery(&guardian, &new_owner);
 
     // owner + guardian both authorize (mock_all_auths covers both)
@@ -109,7 +112,7 @@ fn test_approve_recovery_admin_rejects_guardian_only_auth() {
     let guardian = Address::generate(&env);
     let new_owner = Address::generate(&env);
 
-    client.initialize(&owner, &vec![&env, guardian.clone()]);
+    client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
     client.initiate_recovery(&guardian, &new_owner);
 
     // Only the guardian signs; the owner does NOT authorize.
@@ -144,7 +147,7 @@ fn test_approve_recovery_admin_rejects_when_no_auth_present() {
     let guardian = Address::generate(&env);
     let new_owner = Address::generate(&env);
 
-    client.initialize(&owner, &vec![&env, guardian.clone()]);
+    client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
     client.initiate_recovery(&guardian, &new_owner);
 
     env.set_auths(&[]);
@@ -172,7 +175,7 @@ fn test_approve_recovery_admin_without_pending_recovery_rejected() {
     let owner = Address::generate(&env);
     let guardian = Address::generate(&env);
 
-    client.initialize(&owner, &vec![&env, guardian.clone()]);
+    client.initialize(&owner, &vec![&env, guardian], &1_u32);
 
     let result = client.try_approve_recovery_admin(&guardian);
     assert!(
@@ -195,7 +198,7 @@ fn test_approve_recovery_admin_rejects_after_owner_cancels() {
     let guardian = Address::generate(&env);
     let new_owner = Address::generate(&env);
 
-    client.initialize(&owner, &vec![&env, guardian.clone()]);
+    client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
     client.initiate_recovery(&guardian, &new_owner);
     client.cancel_recovery();
 
@@ -222,7 +225,7 @@ fn test_guardian_cannot_execute_recovery_after_admin_approve() {
     let guardian = Address::generate(&env);
     let new_owner = Address::generate(&env);
 
-    client.initialize(&owner, &vec![&env, guardian.clone()]);
+    client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
     client.initiate_recovery(&guardian, &new_owner);
 
     assert!(client.try_approve_recovery_admin(&guardian).is_ok());

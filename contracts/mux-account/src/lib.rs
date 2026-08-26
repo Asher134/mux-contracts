@@ -202,6 +202,22 @@ impl MuxAccount {
         Ok(())
     }
 
+    /// Pause the contract — suspends all non-admin operations.
+    ///
+    /// Once paused, every entrypoint that calls `require_not_paused` will
+    /// return `Unauthorized` until the owner calls `unpause`. Only the owner
+    /// can pause, so the pause mechanism itself cannot be weaponised by a
+    /// third party to lock the account.
+    ///
+    /// Emits a `paused` audit event.
+    pub fn pause(env: Env) -> Result<(), MuxAccountError> {
+        Self::require_owner(&env)?;
+        env.storage().instance().set(&DataKey::Paused, &true);
+        emit(&env, symbol_short!("paused"), ());
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
     /// Unpause the contract — restores normal operation.
     pub fn unpause(env: Env) -> Result<(), MuxAccountError> {
         Self::require_owner(&env)?;
@@ -1192,6 +1208,74 @@ mod tests {
     }
 
     #[test]
+    fn test_pause_emits_event() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        client.pause();
+        let events = env.events().all();
+        // init + paused
+        assert!(events.len() >= 2);
+        assert_eq!(
+            topic_action(&env, &events, events.len() - 1),
+            symbol_short!("paused")
+        );
+    }
+
+    #[test]
+    fn test_pause_sets_paused_flag() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        assert!(!client.is_paused());
+        client.pause();
+        assert!(client.is_paused());
+    }
+
+    #[test]
+    fn test_pause_then_unpause_clears_flag() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        client.pause();
+        assert!(client.is_paused());
+        client.unpause();
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_pause_blocks_set_delegate() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        client.pause();
+        let delegate = Address::generate(&env);
+        let result = client.try_set_delegate(&delegate, &1000_u64, &true);
+        assert_eq!(result, Err(Ok(MuxAccountError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_pause_blocks_execute() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &1000_i128, &100_u32);
+        client.pause();
+        let target = env.register_contract(None, ExecuteTarget);
+        let result = client.try_execute(
+            &target,
+            &symbol_short!("ping"),
+            &Vec::new(&env),
+            &asset,
+            &10_i128,
+        );
+        assert_eq!(result, Err(Ok(MuxAccountError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_pause_requires_owner_auth() {
+        let (env, client, _owner) = setup_without_auth();
+        let result = client.try_pause();
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_execute_with_session_emits_event() {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
@@ -1471,6 +1555,7 @@ mod tests {
         let _tags = [symbol_short!("mux_acct")];
         let _actions = [
             symbol_short!("init"),
+            symbol_short!("paused"),
             symbol_short!("dlg_set"),
             symbol_short!("dlg_rm"),
             symbol_short!("lmt_set"),

@@ -70,7 +70,7 @@ Off-chain components (TypeScript SDK, frontend, deployment scripts) are out of s
 | T-01 | Owner key compromise | Spoofing | Medium | Critical | Guardian recovery set; hardware wallet recommendation; time-locked admin operations |
 | T-02 | Delegate key compromise | Spoofing | Medium | High | Spend limits cap damage; time-bounded delegate expiry (`expires_at`) |
 | T-03 | Delegate expiry not enforced | Elevation of Privilege | Low | High | `expires_at` checked against ledger time on every invocation; stale delegates rejected |
-| T-04 | Guardian collusion | Spoofing | Low | Critical | M-of-N guardian threshold (future roadmap) |
+| T-04 | Guardian collusion | Spoofing | Low | Critical | M-of-N guardian quorum enforced on-chain — `execute_recovery` requires `approvals.len() >= quorum_threshold`; threshold is set at initialization and adjustable by owner via `set_quorum_threshold` |
 
 ### 4.2 Unauthorized Spending
 
