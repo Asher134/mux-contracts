@@ -1352,6 +1352,42 @@ mod tests {
         }
     }
 
+    // ── simulate_batch does not invoke targets (#651, by design) ─────────────
+    //
+    // simulate_batch is a conservative, read-only preflight — see
+    // docs/simulate-batch.md "Limitations". It intentionally never invokes
+    // target contracts, so it cannot detect auth or contract-level failures
+    // that execute_batch would surface; true dry-run semantics require
+    // Soroban's off-chain Simulation RPC instead. This test locks in that
+    // documented behaviour: an operation that would fail for real (wrong
+    // function name on a real registered contract) is still reported as
+    // successful by simulate_batch.
+
+    #[test]
+    fn test_simulate_batch_reports_success_for_operation_that_would_actually_fail() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let target_id = env.register_contract(None, DummyTarget);
+
+        let caller = Address::generate(&env);
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        // "nonexist" is not a function on DummyTarget — execute_batch would
+        // fail this op for real; simulate_batch must not.
+        ops.push_back(Operation {
+            target: target_id,
+            fn_name: symbol_short!("nonexist"),
+            args: Vec::new(&env),
+            require_success: true,
+            kind: BatchOperationKind::Invoke,
+        });
+
+        let result = client.simulate_batch(&caller, &ops);
+        assert_eq!(result.success_count, 1);
+        assert_eq!(result.failure_count, 0);
+    }
+
     // ── initialize / upgrade (closes #694) ────────────────────────────────────
 
     #[test]
