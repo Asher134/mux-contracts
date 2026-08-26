@@ -118,6 +118,20 @@ After the rollback is live:
 
 ---
 
+## Tracking Completion
+
+The checklists above are templates — completing them from memory during an
+incident leaves no record that they were actually followed. After a
+rollback is verified complete (see
+[rollback-guide.md §4](rollback-guide.md#4-verify-the-rollback-succeeded)),
+append an entry to [`ops/rollback-log.md`](../ops/rollback-log.md) using the
+template there. `scripts/check-rollback-log.sh` runs in CI on every PR and
+fails if an entry is missing a required field or has an unchecked
+checklist confirmation, so a rollback can't be recorded as "done" without
+actually completing both checklists.
+
+---
+
 ## Preventing the Need for Rollback
 
 The best rollback is one you never need:
@@ -137,3 +151,5 @@ The best rollback is one you never need:
 - [BREAKING_CHANGES](BREAKING_CHANGES.md)
 - [scripts/deploy.sh](../scripts/deploy.sh) — deployment script with `--dry-run`
 - [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) — GitHub Actions deploy workflow
+- [ops/rollback-log.md](../ops/rollback-log.md) — completion record for the checklists above
+- [scripts/check-rollback-log.sh](../scripts/check-rollback-log.sh) — CI enforcement for the rollback log

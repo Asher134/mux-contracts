@@ -88,6 +88,12 @@ jobs:
         run: bash scripts/check-deploy-secret-name.sh
       - name: Check tagged releases have WASM hashes + binding version
         run: bash scripts/check-changelog-release-artifacts.sh
+      - name: Check secret-bearing filenames are git-ignored
+        run: bash scripts/check-gitignore-secret-patterns.sh
+      - name: Check deployer-key rotation log entries
+        run: bash scripts/check-deployer-key-rotation-log.sh
+      - name: Check rollback log entries
+        run: bash scripts/check-rollback-log.sh
 
   # ── #661: cargo deny supply-chain check ─────────────────────────────────────
   deny:
@@ -122,6 +128,32 @@ jobs:
       - name: Test verify-wasm-hash.sh behaviour
         run: bash scripts/test-verify-wasm-hash.sh
   # ── end #664 ──────────────────────────────────────────────────────────────
+
+  # ── ops checklist tracking: script self-tests ─────────────────────────────
+  check-gitignore-secret-patterns:
+    name: check-gitignore-secret-patterns (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test check-gitignore-secret-patterns.sh behaviour
+        run: bash scripts/test-check-gitignore-secret-patterns.sh
+
+  check-deployer-key-rotation-log:
+    name: check-deployer-key-rotation-log (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test check-deployer-key-rotation-log.sh behaviour
+        run: bash scripts/test-check-deployer-key-rotation-log.sh
+
+  check-rollback-log:
+    name: check-rollback-log (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test check-rollback-log.sh behaviour
+        run: bash scripts/test-check-rollback-log.sh
+  # ── end ops checklist tracking ─────────────────────────────────────────────
 
   # ── #662: llvm-cov coverage ───────────────────────────────────────────────────
   coverage:
