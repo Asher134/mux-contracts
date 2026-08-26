@@ -197,7 +197,11 @@ impl MuxSpendingPolicy {
             );
             return Err(SpendingPolicyError::PolicyNotFound);
         }
-        let policy: SpendLimit = env.storage().instance().get(&key).unwrap();
+        let policy: SpendLimit = env
+            .storage()
+            .instance()
+            .get(&key)
+            .ok_or(SpendingPolicyError::PolicyNotFound)?;
         if amount > policy.limit {
             emit(
                 &env,
@@ -297,6 +301,25 @@ mod tests {
             client.try_initialize(&admin),
             Err(Ok(SpendingPolicyError::AlreadyInitialized))
         );
+    }
+
+    #[test]
+    fn test_set_policy_requires_admin_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxSpendingPolicy);
+        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let result = client.try_set_policy(&account, &asset, &1000, &17280);
+        assert!(result.is_err());
+        assert!(client.try_get_policy(&account, &asset).is_err());
+        assert_eq!(env.events().all().len(), 1);
     }
 
     // ── set_policy ────────────────────────────────────────────────────────────
