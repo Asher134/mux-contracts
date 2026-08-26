@@ -111,13 +111,23 @@ Every state mutation emits a structured event under the `mux_recv` contract tag.
 | Entrypoint | Action topic | Data payload |
 |---|---|---|
 | `initialize` | `init` | `owner: Address` |
-| `initiate_recovery` | `rec_init` | `(guardian: Address, new_owner: Address)` |
+| `initiate_recovery` | `rec_init` | `(guardian: Address, new_owner: Address, initiated_at: u32, executable_at: u32, expires_at: u32)` |
+| `approve_recovery` | `rec_appr` | `(guardian: Address, approval_count: u32)` |
 | `execute_recovery` | `rec_exec` | `(guardian: Address, new_owner: Address)` |
+| `approve_recovery_admin` | `rec_adm` | `new_owner: Address` |
 | `cancel_recovery` | `rec_cncl` | `()` |
+| `add_guardian` | `grd_add` | `guardian: Address` |
+| `remove_guardian` | `grd_rm` | `guardian: Address` |
+| `set_quorum_threshold` | `qrm_set` | `threshold: u32` |
 | `set_registry` | `reg_link` | `registry_id: Address` |
 | `recovery_request` | _(read-only)_ | Returns the full `RecoveryRequest` struct, no event emitted |
 
-> **Note:** For `rec_init`, `executable_at` is derived from the ledger sequence at initiation time plus `RECOVERY_TIMELOCK`. It is not stored directly in the event data but can be computed from the on-chain ledger context.
+> **Note:** The `rec_init` payload carries the full timelock window as a
+> five-tuple. `initiated_at` is the ledger sequence at initiation, and
+> `executable_at`/`expires_at` are the same deadlines stored in the request
+> struct (`initiated_at + RECOVERY_TIMELOCK` / `initiated_at + RECOVERY_EXPIRY`).
+> Indexers surface deadlines directly from the event data without a
+> follow-up storage read.
 
 All events follow the two-topic convention defined in [`docs/event-topic-conventions.md`](event-topic-conventions.md):
 
@@ -135,14 +145,12 @@ An optional registry contract address (`registry_id`) can be associated with the
 
 - The field is stored under `DataKey::RegistryId` in instance storage.
 - Reading `registry_id()` returns `Option<Address>` — `None` if not set.
-- Setting the registry requires the current **owner's authorization** (`owner.require_auth()`).
-- **On-chain validation (fail-closed):** `set_registry` calls `list_contracts` on the supplied
-  registry address via `try_invoke_contract`. If that call fails (the address is not a deployed
-  mux-registry contract, or the registry is uninitialised), `set_registry` returns
-  `RegistryNotFound` and the address is **not** stored. This prevents stale or spoofed registry
-  links from being silently accepted.
-- A `reg_link` audit event is emitted each time a valid registry address is written, providing a
-  full on-chain audit trail of any registry re-links.
+- Setting the registry requires the current **owner's authorization**: the
+  caller-supplied `owner` argument must equal the stored owner (a mismatch is
+  rejected with `Unauthorized`), and `owner.require_auth()` is called before
+  the storage write.
+- A `reg_link` audit event is emitted each time the registry address is written, providing a full on-chain audit trail of any registry re-links.
+- The stored address is informational: the contract does **not** call the registry at link time. Off-chain tooling should cross-check that the registry contract at that address contains the expected metadata for this recovery deployment.
 - TypeScript binding methods: `setRegistry(sourceKeypair, owner, registryId)` and `getRegistryId(sourceKeypair)`.
 
 ### 4.7 Recovery request struct query
@@ -180,9 +188,8 @@ This entrypoint is read-only (no event emitted) and is designed primarily for of
 
 ## 6. Limitations and Future Work
 
-- **No quorum threshold.** Currently any single guardian can initiate and execute recovery. A future version should require M-of-N guardian signatures.
-- **Single-signer guardian model.** Each guardian acts fully independently — there is no on-chain threshold. Any single guardian can both initiate and execute recovery without co-signing from other guardians. This increases the blast radius of a single compromised guardian key. Planned improvement: require a configurable M-of-N quorum.
-- **Immutable guardian set.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
+- **M-of-N quorum implemented.** `execute_recovery` now requires `approvals.len() >= quorum_threshold`. Guardians call `approve_recovery(guardian)` to add their approval after `initiate_recovery` records the first. The threshold is set at `initialize` time and adjustable by the owner via `set_quorum_threshold`.
+- **Immutable guardian set after initialization.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
 - **No guardian liveness check.** If all guardians lose their keys, recovery is impossible.
   See [§8 Guardian Liveness and Last-Resort Recovery](#8-guardian-liveness-and-last-resort-recovery)
   for operational guidance and recommended mitigations.

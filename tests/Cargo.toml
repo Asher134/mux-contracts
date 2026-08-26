@@ -25,3 +25,7 @@ path = "cross_contract_integration.rs"
 [[test]]
 name = "fixture_vectors"
 path = "fixture_vectors.rs"
+
+[[test]]
+name = "upgrade_preflight"
+path = "upgrade_preflight.rs"

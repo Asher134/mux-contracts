@@ -49,8 +49,8 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -150,6 +150,24 @@ impl MuxWalletRegistry {
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
         emit(&env, symbol_short!("init"), owner);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM. Owner only.
+    ///
+    /// See `docs/contract-upgrade-pattern.md` for storage-compatibility rules
+    /// that must be observed between versions. Instance storage (owner, wallet
+    /// entries, and names list) is preserved across upgrades by the Soroban host.
+    ///
+    /// Extends the instance storage TTL so an upgrade performed just before a
+    /// long quiet period does not leave storage at risk of expiry (T-21).
+    ///
+    /// # Errors
+    /// - [`WalletRegistryError::NotInitialized`] if `initialize` was never called.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), WalletRegistryError> {
+        Self::require_owner(&env)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Self::extend_ttl(&env);
         Ok(())
     }

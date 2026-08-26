@@ -79,7 +79,7 @@ If users have already transacted with the new contract and their state must not 
      --id <BROKEN_CONTRACT_ID> \
      --network mainnet \
      --source <ADMIN_SECRET_KEY> \
-     -- set_active --active false
+     -- pause
    ```
 
 2. Deploy the fixed version and migrate any required state via admin migration functions.

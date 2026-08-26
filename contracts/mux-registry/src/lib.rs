@@ -40,8 +40,8 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -118,6 +118,21 @@ impl MuxRegistry {
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
         emit(&env, symbol_short!("init"), admin);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM. Admin only.
+    ///
+    /// See `docs/contract-upgrade-pattern.md` for storage-compatibility rules
+    /// that must be observed between versions. Instance storage (admin, names,
+    /// versions, and metadata) is preserved across upgrades by the Soroban host.
+    ///
+    /// Extends the instance storage TTL so an upgrade performed just before a
+    /// long quiet period does not leave storage at risk of expiry (T-21).
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), MuxRegistryError> {
+        Self::require_admin(&env)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Self::extend_ttl(&env);
         Ok(())
     }
