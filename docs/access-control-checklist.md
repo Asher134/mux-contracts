@@ -1,7 +1,7 @@
 # Mux Protocol — Access Control Review Checklist
 
-**Version:** 0.1.0  
-**Date:** 2026-05-30  
+**Version:** 0.2.0  
+**Date:** 2026-08-26  
 **Purpose:** Use this checklist before every contract release, audit engagement, or major feature PR to verify that access control is correctly enforced across all Mux Protocol contracts.
 
 ---
@@ -22,6 +22,10 @@ Legend:
 ## 1. Authentication (`require_auth`)
 
 ### 1.1 `mux-account`
+
+> **Immutable by design** — no `upgrade()` entry point exists or will be added.
+> See [account-upgrade-migration.md](account-upgrade-migration.md) and
+> [upgrade-auth-requirements.md](upgrade-auth-requirements.md).
 
 - [ ] `initialize` — `owner.require_auth()` called before any storage write.
 - [ ] `set_delegate` — `require_owner` helper called; verifies `owner.require_auth()`.
@@ -251,10 +255,10 @@ release) after.
 
 ## 6. Storage Isolation
 
-- [ ] Each contract uses its own `DataKey` enum with no overlapping key names across contracts.
-- [ ] All storage reads use `ok_or(SomeError::NotInitialized)` — no silent `unwrap` that could panic post-deployment.
-- [ ] Persistent storage keys are namespaced by type (e.g., `SpendLimit(Address)` vs `Delegates`).
-- [ ] No contract reads or writes to another contract's storage directly.
+- [x] Each contract uses its own `DataKey` enum with no overlapping key names across contracts (verified: `enum DataKey` defined independently in all 10 `contracts/*/src/lib.rs`; Soroban's per-contract-instance storage means cross-contract name collisions are not reachable regardless).
+- [x] All storage reads use `ok_or(SomeError::NotInitialized)` — no silent `unwrap` that could panic post-deployment (verified via `rg '\.unwrap\(\)' contracts/*/src/lib.rs` restricted to non-`#[cfg(test)]` code; the one gap found — `mux-spending-policy::check_spend` reading `DataKey::SpendLimit` after a `.has()` check — is fixed to `.ok_or(SpendingPolicyError::PolicyNotFound)?`).
+- [x] Persistent storage keys are namespaced by type (e.g., `SpendLimit(Address)` vs `Delegates`) (verified: tuple-variant keys such as `mux-account::DataKey::SessionKey(Address, Address)`, `mux-spending-policy::DataKey::SpendLimit(Address, Address)`, `mux-delegation::DataKey::DelegatePerms(Address, Address)`).
+- [x] No contract reads or writes to another contract's storage directly (architectural: the Soroban host does not expose an API for a contract to address another contract's storage; all cross-contract effects go through `invoke_contract`).
 
 ---
 
@@ -262,19 +266,20 @@ release) after.
 
 See [docs/storage-griefing.md](storage-griefing.md) for full details.
 
-- [ ] `mux-account`: `set_delegate` enforces `MAX_DELEGATES = 64`; new entries beyond cap return `TooManyDelegates` (unit test: `test_delegate_cap_enforced`).
-- [ ] `mux-account`: updating an existing delegate at cap succeeds (unit test: `test_delegate_cap_allows_update`).
-- [ ] `mux-account`: expired delegates are reclaimed using ledger timestamps before enforcing the cap (unit test: `test_delegate_cap_reclaims_expired_entries`).
-- [ ] `mux-account-factory`: `deploy_account` and `deploy_account_with_metadata` enforce `MAX_ACCOUNTS_PER_OWNER = 64` per owner; new deploys beyond cap return `TooManyAccounts` (unit tests: `test_accounts_cap_enforced`, `test_deploy_account_with_metadata_enforces_cap`).
-- [ ] `mux-account-factory`: `simulate_deploy` and `simulate_deploy_with_metadata` enforce the same 64-account cap without writing state (unit tests: `test_simulate_deploy_enforces_cap`, `test_simulate_deploy_with_metadata_enforces_cap`).
-- [ ] `mux-account-factory`: per-owner cap is independent — one owner filling their cap does not block other owners (unit test: `test_cap_is_per_owner_not_global`).
-- [ ] `mux-account-factory`: metadata string sizes are bounded (`MAX_VERSION_LENGTH = 32`, `MAX_DESCRIPTION_LENGTH = 256`, `MAX_AUTHOR_LENGTH = 64`); oversized strings return `MetadataTooLarge` (unit tests: `test_metadata_version_too_long`, `test_metadata_description_too_long`, `test_metadata_author_too_long`).
-- [ ] `mux-account-factory`: `max_accounts_per_owner()` public entrypoint returns 64; TypeScript clients must query this before deploy to avoid `TooManyAccounts` (unit test: `test_max_accounts_per_owner_returns_64`).
-- [ ] `mux-permissions`: `grant_role` enforces `MAX_ROLE_MEMBERS = 256` per role; returns `TooManyMembers` (unit test: `test_role_member_cap_enforced`).
-- [ ] `mux-permissions`: `grant_role` enforces `MAX_ROLES_PER_ACCOUNT = 32` per account; returns `TooManyRoles` (unit test: `test_roles_per_account_cap_enforced`).
-- [ ] All three contracts call `env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO)` on every write (T-21 mitigation).
-- [ ] TTL constants: `TTL_THRESHOLD = 17_280` (~1 day), `TTL_EXTEND_TO = 518_400` (~30 days).
-- [ ] Deployment runbook includes a keeper job that extends TTL at least every 25 days (see [docs/storage-griefing.md](storage-griefing.md#deployment-runbook--ttl-keeper)).
+- [x] `mux-account`: `set_delegate` enforces `MAX_DELEGATES = 64`; new entries beyond cap return `TooManyDelegates` (unit test: `test_delegate_cap_enforced`).
+- [x] `mux-account`: updating an existing delegate at cap succeeds (unit test: `test_delegate_cap_allows_update`).
+- [x] `mux-account`: expired delegates are reclaimed using ledger timestamps before enforcing the cap (unit test: `test_delegate_cap_reclaims_expired_entries`).
+- [x] `mux-account-factory`: `deploy_account` and `deploy_account_with_metadata` enforce `MAX_ACCOUNTS_PER_OWNER = 64` per owner; new deploys beyond cap return `TooManyAccounts` (unit tests: `test_accounts_cap_enforced`, `test_deploy_account_with_metadata_enforces_cap`).
+- [x] `mux-account-factory`: `simulate_deploy` and `simulate_deploy_with_metadata` enforce the same 64-account cap without writing state (unit tests: `test_simulate_deploy_enforces_cap`, `test_simulate_deploy_with_metadata_enforces_cap`).
+- [x] `mux-account-factory`: per-owner cap is independent — one owner filling their cap does not block other owners (unit test: `test_cap_is_per_owner_not_global`).
+- [x] `mux-account-factory`: metadata string sizes are bounded (`MAX_VERSION_LENGTH = 32`, `MAX_DESCRIPTION_LENGTH = 256`, `MAX_AUTHOR_LENGTH = 64`); oversized strings return `MetadataTooLarge` (unit tests: `test_metadata_version_too_long`, `test_metadata_description_too_long`, `test_metadata_author_too_long`).
+- [x] `mux-account-factory`: `max_accounts_per_owner()` public entrypoint returns 64; TypeScript clients must query this before deploy to avoid `TooManyAccounts` (unit test: `test_max_accounts_per_owner_returns_64`).
+- [x] `mux-permissions`: `grant_role` enforces `MAX_ROLE_MEMBERS = 256` per role; returns `TooManyMembers` (unit test: `test_role_member_cap_enforced`).
+- [x] `mux-permissions`: `grant_role` enforces `MAX_ROLES_PER_ACCOUNT = 32` per account; returns `TooManyRoles` (unit test: `test_roles_per_account_cap_enforced`).
+- [x] All three contracts (`mux-account`, `mux-account-factory`, `mux-permissions`) call `env.storage().instance().extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO)` on every write (T-21 mitigation) (verified: `bash scripts/test-ttl-keeper.sh` Tests 1–3 pass for all ten contract crates, confirming the constants, the per-write `extend_ttl` calls, and unit test coverage for instance-storage TTL extension).
+- [x] TTL constants: `TTL_THRESHOLD = 17_280` (~1 day), `TTL_EXTEND_TO = 518_400` (~30 days) (verified identical across all ten contract crates by `scripts/test-ttl-keeper.sh` Test 1).
+- [x] Deployment runbook includes a keeper job that extends TTL at least every 25 days (see [docs/storage-griefing.md](storage-griefing.md#deployment-runbook--ttl-keeper)) (verified: `scripts/test-ttl-keeper.sh` Test 5 checks the runbook section and CLI example exist).
+- [ ] `mux-policy` and `mux-delegation` extend the TTL of the **persistent** storage entries they write (`WalletLimit` records in `mux-policy`; `DelegatePerms` records in `mux-delegation`), not just instance storage — **Fail**. Neither contract calls `.persistent().extend_ttl(...)` on the keys it writes with `.persistent().set(...)` (`contracts/mux-policy/src/lib.rs:197,254,279`; `contracts/mux-delegation/src/lib.rs:200`), so those entries can be archived/evicted independently of the contract instance's own TTL. `scripts/test-ttl-keeper.sh` Test 4 already catches this (currently failing) but is not yet wired into CI (`.github/workflows/ci.yml`) or `Makefile`, so the failure goes unnoticed. Remediation: add `.persistent().extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND_TO)` calls alongside each `.persistent().set(...)` in both contracts, then add a CI step running `scripts/test-ttl-keeper.sh`. Tracked for a follow-up PR — out of scope for the doc/test changes in this one.
 
 ---
 

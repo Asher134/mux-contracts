@@ -9,8 +9,10 @@ export interface MuxContractIds {
   muxPermissions: string;
   muxWalletRegistry: string;
   muxAccountFactory?: string;
-  muxRegistry?: string;
   muxPolicy?: string;
+  muxRecovery?: string;
+  muxRegistry?: string;
+  muxSpendingPolicy?: string;
 }
 
 export interface SpendLimit {

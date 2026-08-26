@@ -84,6 +84,10 @@ jobs:
         run: bash scripts/check-doc-examples.sh
       - name: Check architecture docs list every contract crate
         run: bash scripts/check-architecture-docs.sh
+      - name: Check CONTRACT_IDS.md / addresses.json stay in sync (#674)
+        run: bash scripts/check-contract-ids-sync.sh
+      - name: Check security policy is hardened (#673)
+        run: bash scripts/check-security-policy.sh
       - name: Check deploy workflow secret name matches deploy.sh
         run: bash scripts/check-deploy-secret-name.sh
       - name: Check tagged releases have WASM hashes + binding version
@@ -154,6 +158,22 @@ jobs:
       - name: Test check-rollback-log.sh behaviour
         run: bash scripts/test-check-rollback-log.sh
   # ── end ops checklist tracking ─────────────────────────────────────────────
+
+  check-contract-ids-sync:
+    name: check-contract-ids-sync (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test check-contract-ids-sync.sh behaviour
+        run: bash scripts/test-check-contract-ids-sync.sh
+
+  check-security-policy:
+    name: check-security-policy (script self-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test check-security-policy.sh behaviour
+        run: bash scripts/test-check-security-policy.sh
 
   # ── #662: llvm-cov coverage ───────────────────────────────────────────────────
   coverage:

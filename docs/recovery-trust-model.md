@@ -175,9 +175,8 @@ This entrypoint is read-only (no event emitted) and is designed primarily for of
 
 ## 6. Limitations and Future Work
 
-- **No quorum threshold.** Currently any single guardian can initiate and execute recovery. A future version should require M-of-N guardian signatures.
-- **Single-signer guardian model.** Each guardian acts fully independently — there is no on-chain threshold. Any single guardian can both initiate and execute recovery without co-signing from other guardians. This increases the blast radius of a single compromised guardian key. Planned improvement: require a configurable M-of-N quorum.
-- **Immutable guardian set.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
+- **M-of-N quorum implemented.** `execute_recovery` now requires `approvals.len() >= quorum_threshold`. Guardians call `approve_recovery(guardian)` to add their approval after `initiate_recovery` records the first. The threshold is set at `initialize` time and adjustable by the owner via `set_quorum_threshold`.
+- **Immutable guardian set after initialization.** Guardians cannot be rotated without redeploying the contract. A guardian rotation mechanism with its own timelock is planned.
 - **No guardian liveness check.** If all guardians lose their keys, recovery is impossible.
 - **No on-chain registry validation.** The `registry_id` field stores an address but does not call the registry at initialization time. Off-chain tooling must verify the link is correct and that the registry entry matches the deployed contract.
 

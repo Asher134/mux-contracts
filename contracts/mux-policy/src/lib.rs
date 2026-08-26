@@ -359,6 +359,43 @@ mod tests {
     }
 
     #[test]
+    fn test_set_daily_limit_requires_admin_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxPolicy);
+        let client = MuxPolicyClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+        }
+
+        let wallet = Address::generate(&env);
+        let result = client.try_set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
+        assert!(result.is_err());
+        assert!(client.try_get_daily_limit(&wallet).is_err());
+        assert_eq!(env.events().all().len(), 1);
+    }
+
+    #[test]
+    fn test_record_spend_requires_wallet_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxPolicy);
+        let client = MuxPolicyClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let wallet = Address::generate(&env);
+        {
+            let _guard = env.mock_all_auths();
+            client.initialize(&admin);
+            client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
+        }
+
+        let result = client.try_record_spend(&wallet, &100_i128);
+        assert!(result.is_err());
+        assert_eq!(client.get_daily_limit(&wallet).spent, 0);
+        assert_eq!(env.events().all().len(), 2);
+    }
+
+    #[test]
     fn test_set_daily_limit() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
