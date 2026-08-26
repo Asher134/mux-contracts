@@ -138,6 +138,42 @@ Legend:
 - [ ] Cross-contract invocations inside the batch cannot re-enter `mux-batcher` itself.
 - [ ] The caller of `execute_batch` is documented to be responsible for vetting target contracts.
 
+### 5.1 Reentrancy Guard (#690)
+
+The `execute_batch` function implements a reentrancy guard using `DataKey::Executing`:
+
+**Guard lifecycle:**
+1. **Set** immediately after size validation passes, before any operations execute
+2. **Checked** at guard-set time — returns `ReentrancyDetected` if already set
+3. **Cleared** on **all exit paths**, including:
+   - Success path: after batch loop completes normally
+   - Abort path: before returning `RequiredOperationFailed` when a required operation fails
+   - **Not** set/cleared on early returns (`EmptyBatch`, `BatchTooLarge`) — guard never set on those paths
+
+**Critical properties:**
+- [x] Guard is set after `ops.is_empty()` and `ops.len() > MAX_BATCH_SIZE` checks, so those early returns never touch the guard
+- [x] Guard is explicitly removed before returning `Err(RequiredOperationFailed)` on the abort path
+- [x] Guard is removed after successful batch completion before returning `Ok(BatchResult)`
+- [x] Guard prevents recursive `execute_batch` calls from within a batched operation
+- [x] Subsequent calls in the same session work because guard is always cleared (verified by unit test: `test_reentrancy_guard_clears_after_success`)
+- [x] Guard is cleared even when a required operation fails (verified by unit test: `test_reentrancy_guard_clears_after_required_op_fails`)
+- [x] Pre-seeded `Executing=true` is detected and rejected (verified by unit test: `test_reentrancy_detected_when_executing_flag_already_set`)
+
+**Soroban rollback semantics:**
+- **Contract-level error** (`return Err(...)`) does NOT auto-rollback instance storage
+- **Host-level trap** (`panic!`) auto-rolls back all storage writes for the invocation
+- `mux-batcher` uses contract-level errors so callers can inspect error codes, therefore the guard must be manually cleared before each `return Err(...)`
+
+**Test coverage:**
+- [x] `test_reentrancy_guard_clears_after_success` — two sequential batches succeed
+- [x] `test_reentrancy_guard_clears_after_required_op_fails` — abort path clears guard; second batch succeeds
+- [x] `test_reentrancy_detected_when_executing_flag_already_set` — pre-seeded flag returns `ReentrancyDetected`
+
+**Documentation:**
+- [x] Rollback semantics documented in `contracts/mux-batcher/src/lib.rs` (lines 131-155)
+- [x] Guard lifecycle documented in `execute_batch` function doc comment
+- [x] This checklist section (#690)
+
 ---
 
 ## 6. Storage Isolation
