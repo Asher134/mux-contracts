@@ -10,6 +10,9 @@
     "muxRecovery": "",
     "muxPolicy": "",
     "muxSpendingPolicy": ""
+    "muxAccountFactory": "",
+    "muxRegistry": "",
+    "muxPolicy": ""
   },
   "testnet": {
     "muxAccount": "",
@@ -22,6 +25,9 @@
     "muxRecovery": "",
     "muxPolicy": "",
     "muxSpendingPolicy": ""
+    "muxAccountFactory": "",
+    "muxRegistry": "",
+    "muxPolicy": ""
   },
   "mainnet": {
     "muxAccount": "",
@@ -34,5 +40,8 @@
     "muxRecovery": "",
     "muxPolicy": "",
     "muxSpendingPolicy": ""
+    "muxAccountFactory": "",
+    "muxRegistry": "",
+    "muxPolicy": ""
   }
 }
