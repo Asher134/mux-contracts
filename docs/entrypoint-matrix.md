@@ -23,6 +23,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(owner, guardians)` | A | One-time setup; owner authorizes |
+| `pause()` | A | Owner only; sets Paused flag; emits `paused` event |
 | `unpause()` | A | Owner only |
 | `is_paused()` | P | Read-only |
 | `set_delegate(delegate, expires_at, can_spend)` | A | Owner only; paused check; `expires_at` is a Unix timestamp |

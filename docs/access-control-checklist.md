@@ -24,6 +24,7 @@ Legend:
 ### 1.1 `mux-account`
 
 - [ ] `initialize` — `owner.require_auth()` called before any storage write.
+- [ ] `pause` — `require_owner` helper called; sets `DataKey::Paused` to `true`; emits `paused` event.
 - [ ] `set_delegate` — `require_owner` helper called; verifies `owner.require_auth()`.
 - [ ] `remove_delegate` — `require_owner` helper called.
 - [ ] `set_spend_limit` — `require_owner` helper called.
