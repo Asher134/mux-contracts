@@ -300,7 +300,7 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 
 ## 9. CI / CD Verification
 
-- [ ] `cargo clippy --workspace --all-features -- -D warnings` passes with no warnings.
+- [ ] `cargo clippy --workspace --all-features --all-targets -- -D warnings` passes with no warnings.
 - [ ] `cargo fmt --check` passes.
 - [ ] Bindings drift check (`check-binding-drift` job) passes on PRs.
 - [ ] Release builds use `[profile.release]` with `overflow-checks = true` and `panic = "abort"`.
