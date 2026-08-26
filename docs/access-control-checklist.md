@@ -83,6 +83,7 @@ Legend:
 - [ ] `register` — `require_admin` helper called.
 - [ ] `register_with_metadata` — `require_admin` helper called.
 - [ ] `get_version`, `get_metadata`, `list_contracts`, `check_version` — read-only; no auth required (acceptable).
+- [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called.
 - [ ] No registry mutation is possible without admin signature.
 
 ### 1.6 `mux-recovery`
@@ -94,6 +95,7 @@ Legend:
 - [ ] `approve_recovery_admin` — `require_owner` helper called; lets the owner bypass the timelock for a pending recovery.
 - [ ] `add_guardian` / `remove_guardian` — `require_owner` helper called; `remove_guardian` additionally rejects removing the last guardian.
 - [ ] `set_registry` — `owner.require_auth()` called.
+- [ ] `upgrade` — `require_owner` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; should not be called while a `Pending` recovery is in flight.
 - [ ] No recovery mutation is possible without guardian or owner authorization.
 
 ### 1.7 `mux-delegation`
@@ -104,6 +106,33 @@ Legend:
 - [ ] `initialize` — `admin.require_auth()` called before storage write; optional (delegation grants work without it) and establishes a **separate** stored admin used only by `upgrade`.
 - [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called.
 - [ ] `get_delegate_permissions`, `is_delegate`, `get_delegates`, `check_delegate`, `get_contract_id` — read-only; no auth required (acceptable).
+
+### 1.8 `mux-spending-policy`
+
+- [ ] `initialize` — `admin.require_auth()` called before storage write.
+- [ ] `set_policy` — `require_admin` helper called; only admin can configure limits.
+- [ ] `get_policy`, `check_spend` — read-only or validation-only; no auth required (acceptable).
+- [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; WASM upgrade is admin-gated.
+- [ ] No policy mutation is possible without admin signature.
+
+### 1.9 `mux-wallet-registry`
+
+- [ ] `initialize` — `owner.require_auth()` called before storage write.
+- [ ] `register_wallet` — `require_owner` helper called; only owner can register wallets.
+- [ ] `register_wallet_with_metadata` — `require_owner` helper called; only owner can register wallets.
+- [ ] `get_wallet`, `get_metadata`, `list_wallets` — read-only; no auth required (acceptable).
+- [ ] `upgrade` — `require_owner` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; WASM upgrade is owner-gated.
+- [ ] No wallet registry mutation is possible without owner signature.
+
+### 1.10 `mux-account-factory`
+
+- [ ] `initialize` — `admin.require_auth()` called before storage write; optional (account registration works without it) and establishes a stored admin used only by `upgrade`.
+- [ ] `deploy_account` — `owner.require_auth()` called per-call; no stored admin required.
+- [ ] `deploy_account_with_metadata` — `owner.require_auth()` called per-call.
+- [ ] `simulate_deploy` / `simulate_deploy_with_metadata` — read-only dry-runs; no auth required (acceptable).
+- [ ] `get_accounts`, `account_count`, `get_account_metadata`, `max_accounts_per_owner` — read-only; no auth required (acceptable).
+- [ ] `upgrade` — stored `DataKey::Admin` read and `admin.require_auth()` called; `NotInitialized` (fail-closed) if `initialize` was never called.
+- [ ] No upgrade path is possible without the explicitly initialized admin signature.
 
 ---
 
@@ -293,6 +322,11 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 - [ ] `mux-batcher`: empty batch, oversized batch, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-registry`: initialize, double-initialize, register/register-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-spending-policy`: initialize, double-initialize, set-policy, check-spend, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-wallet-registry`: initialize, double-initialize, register-wallet, register-wallet-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-recovery`: initialize, double-initialize, initiate/cancel/execute recovery, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-account-factory`: deploy-account, deploy-with-metadata, cap enforcement, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] All `require_owner` / `require_admin` paths have a negative test (unauthorized caller).
 - [ ] All `AlreadyInitialized` paths have a test.
 - [ ] CI runs `cargo test --workspace --all-features` on every PR (see `.github/workflows/ci.yml`).

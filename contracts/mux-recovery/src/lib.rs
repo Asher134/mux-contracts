@@ -80,7 +80,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -310,6 +310,30 @@ impl MuxRecovery {
             .instance()
             .set(&DataKey::QuorumThreshold, &quorum_threshold);
         emit(&env, symbol_short!("init"), owner);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM. Owner only.
+    ///
+    /// See `docs/contract-upgrade-pattern.md` for storage-compatibility rules
+    /// that must be observed between versions. Instance storage (owner,
+    /// guardians, active recovery request, and registry link) is preserved
+    /// across upgrades by the Soroban host.
+    ///
+    /// **Recovery time-criticality note**: a WASM upgrade should never be
+    /// performed while a `Pending` recovery is in flight, as the upgrade
+    /// temporarily changes the executing code while the timelock window is
+    /// open. Verify `recovery_status()` is not `Pending` before upgrading.
+    ///
+    /// Extends the instance storage TTL so an upgrade performed just before a
+    /// long quiet period does not leave storage at risk of expiry (T-21).
+    ///
+    /// # Errors
+    /// - [`RecoveryError::NotInitialized`] if `initialize` was never called.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Self::extend_ttl(&env);
         Ok(())
     }

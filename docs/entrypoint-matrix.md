@@ -50,6 +50,8 @@ by a specific actor; public entrypoints are callable by anyone.
 
 | Entrypoint | Auth | Notes |
 |---|---|---|
+| `initialize(admin)` | A | Optional, one-time; sets the upgrade admin only — account registration works without it |
+| `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
 | `deploy_account(owner, addr)` | U | Owner authorizes; enforces `MAX_ACCOUNTS_PER_OWNER = 64` cap |
 | `deploy_account_with_metadata(owner, addr, ...)` | U | Owner authorizes; enforces cap and metadata string size limits |
 | `simulate_deploy(owner, addr)` | P | Dry-run; no state mutation; mirrors same cap check as `deploy_account` |
@@ -124,6 +126,9 @@ by a specific actor; public entrypoints are callable by anyone.
 
 | Entrypoint | Auth | Notes |
 |---|---|---|
+| `initialize(owner, guardians)` | U | Owner authorizes |
+| `upgrade(new_wasm_hash)` | A | Owner only; `NotInitialized` if `initialize` was never called; should not be called while a `Pending` recovery is in flight |
+| `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes; rejects if a non-expired recovery is already pending |
 | `initialize(owner, guardians, quorum_threshold)` | U | Owner authorizes; `quorum_threshold` must be >= 1 and <= guardians.len() |
 | `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes; rejects if a non-expired recovery is already pending; records guardian as first approval toward quorum |
 | `approve_recovery(guardian)` | U | Guardian authorizes; adds approval to the pending request; rejects duplicates |
@@ -146,6 +151,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(admin)` | A | One-time setup |
+| `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
 | `register(name, version)` | A | Admin only |
 | `register_with_metadata(name, version, desc, author, repo)` | A | Admin only |
 | `check_version(name)` | P | Dry-run; no state mutation |
@@ -158,6 +164,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(admin)` | A | One-time setup |
+| `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
 | `set_policy(account, asset, limit, period_ledgers)` | A | Admin only; resets `spent` to 0 |
 | `get_policy(account, asset)` | P | Read-only |
 | `check_spend(account, asset, amount)` | P | Read-only; no state mutation |
@@ -167,6 +174,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | Entrypoint | Auth | Notes |
 |---|---|---|
 | `initialize(owner)` | U | Owner authorizes |
+| `upgrade(new_wasm_hash)` | A | Owner only; `NotInitialized` if `initialize` was never called |
 | `register_wallet(name, wallet)` | U | Owner authorizes |
 | `register_wallet_with_metadata(name, wallet, label, desc)` | U | Owner authorizes; capped at `MAX_WALLETS` |
 | `get_wallet(name)` | P | Read-only |

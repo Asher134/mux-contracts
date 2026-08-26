@@ -249,7 +249,9 @@ Contract tag: `mux_spend`
 | `chk_ok` | `check_spend` succeeds (within limit) | `(account: Address, asset: Address, amount: i128)` |
 | `chk_ex` | `check_spend` fails (exceeds limit or policy not found) | `(account: Address, asset: Address, amount: i128, limit_or_reason: i128 | Symbol)` |
 
-> `get_policy` is read-only and emits no events.
+> `get_policy` is read-only and emits no events. `upgrade` emits no event —
+> the upload/invoke transaction is the audit record; the same convention
+> applies as for `mux-policy` and `mux-permissions`.
 
 ---
 
@@ -264,6 +266,8 @@ Contract tag: `mux_wreg`
 | `wlt_meta` | `register_wallet_with_metadata` succeeds (new entry or overwrite) | `(name: Symbol, wallet: Address)` |
 
 > `get_wallet`, `get_metadata`, and `list_wallets` are read-only and emit no events.
+> `upgrade` emits no event — the upload/invoke transaction is the audit record;
+> the same convention applies as for `mux-policy` and `mux-permissions`.
 
 ---
 
@@ -278,7 +282,9 @@ Contract tag: `mux_reg`
 | `regmeta` | `register_with_metadata` succeeds (new entry or update) | `(name: Symbol, version: String)` |
 
 > `get_version`, `check_version`, `get_metadata`, and `list_contracts` are
-> read-only and emit no events.
+> read-only and emit no events. `upgrade` emits no event — the upload/invoke
+> transaction is the audit record; the same convention applies as for
+> `mux-policy` and `mux-permissions`.
 
 ---
 
@@ -305,7 +311,9 @@ Contract tag: `mux_recv`
 > ledgers ≈ 24h) and `RECOVERY_EXPIRY` (120,960 ledgers ≈ 7d) are stable ABI
 > — see [`docs/recovery-trust-model.md`](recovery-trust-model.md).
 > `owner`, `guardians`, `recovery_status`, `recovery_request`, and
-> `registry_id` are read-only and emit no events.
+> `registry_id` are read-only and emit no events. `upgrade` emits no event —
+> the upload/invoke transaction is the audit record; the same convention
+> applies as for `mux-policy` and `mux-permissions`.
 
 ---
 
