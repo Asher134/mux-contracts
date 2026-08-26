@@ -308,6 +308,15 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 - [ ] Coverage job (`coverage`) runs `cargo-llvm-cov` and emits `coverage/lcov.info` (#662).
 - [ ] All four new CI jobs (`deny`, `check-no-testutils`, `verify-wasm-hash`, `coverage`) are  
       green before a mainnet deploy is approved.
+- [ ] `scripts/check-gitignore-secret-patterns.sh` passes — `.env`, `*.secret`,  
+      `deployment.env`, and `deployer.json` remain git-ignored (see  
+      [deployer-key-requirements.md](deployer-key-requirements.md#security-checklist)).
+- [ ] `scripts/check-deployer-key-rotation-log.sh` passes — any entry in  
+      [`ops/deployer-key-rotation-log.md`](../ops/deployer-key-rotation-log.md) is  
+      complete and its drain/archive confirmations are checked.
+- [ ] `scripts/check-rollback-log.sh` passes — any entry in  
+      [`ops/rollback-log.md`](../ops/rollback-log.md) is complete and both  
+      checklist confirmations from [rollback-deploy.md](rollback-deploy.md) are checked.
 
 ---
 
