@@ -118,17 +118,20 @@ by a specific actor; public entrypoints are callable by anyone.
 
 | Entrypoint | Auth | Notes |
 |---|---|---|
-| `initialize(owner, guardians)` | U | Owner authorizes |
-| `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes; rejects if a non-expired recovery is already pending |
+| `initialize(owner, guardians, quorum_threshold)` | U | Owner authorizes; `quorum_threshold` must be >= 1 and <= guardians.len() |
+| `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes; rejects if a non-expired recovery is already pending; records guardian as first approval toward quorum |
+| `approve_recovery(guardian)` | U | Guardian authorizes; adds approval to the pending request; rejects duplicates |
 | `cancel_recovery()` | U | Owner authorizes |
-| `execute_recovery(guardian)` | U | Guardian authorizes; timelock and expiry check |
-| `approve_recovery_admin()` | U | Owner authorizes; executes a pending recovery immediately, bypassing the timelock |
+| `execute_recovery(guardian)` | U | Guardian authorizes; timelock, expiry, and quorum checks (approvals >= threshold) |
+| `approve_recovery_admin(co_guardian)` | U | Owner **and** a registered guardian co-sign; executes a pending recovery immediately, bypassing the timelock; requires both `owner.require_auth()` and `co_guardian.require_auth()` + guardian-membership check |
 | `add_guardian(guardian)` | U | Owner authorizes; capped at `MAX_GUARDIANS` |
 | `remove_guardian(guardian)` | U | Owner authorizes; rejects if it would leave zero guardians |
+| `set_quorum_threshold(threshold)` | U | Owner authorizes; threshold must be >= 1 and <= guardian count; emits `qrm_set` |
 | `owner()` | P | Read-only |
 | `guardians()` | P | Read-only |
 | `recovery_status()` | P | Read-only |
-| `recovery_request()` | P | Read-only; full request record or `None` |
+| `recovery_request()` | P | Read-only; full request record (includes `approvals` Vec) or `None` |
+| `quorum_threshold()` | P | Read-only; returns the current M-of-N threshold |
 | `set_registry(owner, registry_id)` | U | Owner authorizes |
 | `registry_id()` | P | Read-only |
 
