@@ -1,23 +1,38 @@
 {
   "localnet": {
     "muxAccount": "",
+    "muxAccountFactory": "",
     "muxBatcher": "",
     "muxDelegation": "",
     "muxPermissions": "",
-    "muxWalletRegistry": ""
+    "muxWalletRegistry": "",
+    "muxRegistry": "",
+    "muxRecovery": "",
+    "muxPolicy": "",
+    "muxSpendingPolicy": ""
   },
   "testnet": {
     "muxAccount": "",
+    "muxAccountFactory": "",
     "muxBatcher": "",
     "muxDelegation": "",
     "muxPermissions": "",
-    "muxWalletRegistry": ""
+    "muxWalletRegistry": "",
+    "muxRegistry": "",
+    "muxRecovery": "",
+    "muxPolicy": "",
+    "muxSpendingPolicy": ""
   },
   "mainnet": {
     "muxAccount": "",
+    "muxAccountFactory": "",
     "muxBatcher": "",
     "muxDelegation": "",
     "muxPermissions": "",
-    "muxWalletRegistry": ""
+    "muxWalletRegistry": "",
+    "muxRegistry": "",
+    "muxRecovery": "",
+    "muxPolicy": "",
+    "muxSpendingPolicy": ""
   }
 }
