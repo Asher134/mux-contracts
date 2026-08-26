@@ -46,7 +46,7 @@ Legend:
 - [ ] `execute_batch` — `caller.require_auth()` called before any operations are dispatched.
 - [ ] `simulate_batch` — `caller.require_auth()` called (preflight is also auth-gated).
 - [ ] `submit_batch` — delegates to `execute_batch`, deriving `caller` from the invoker; same auth guarantee applies.
-- [ ] `set_registry_metadata` — **intentionally no auth check**; write-once (rejects with `MetadataAlreadySet` on a second call), expected to be called by the deployer immediately after deployment. Confirm this write-once guard is still in place if this function changes.
+- [ ] `set_registry_metadata` — `require_admin` helper called before the `MetadataAlreadySet` check (fail-closed: unauthenticated callers cannot probe metadata state); returns `NotInitialized` if `initialize` was never called.
 - [ ] Batch operations are dispatched under the **caller's** auth context, not the batcher contract's.
 - [ ] `initialize` — `admin.require_auth()` called before storage write; optional (batching works without it).
 - [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; no silent skip of the auth check.

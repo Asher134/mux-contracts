@@ -357,13 +357,19 @@ impl MuxBatcher {
     /// Store registry metadata (description, author) for this batcher instance.
     ///
     /// Can only be called once; subsequent calls return `MetadataAlreadySet`.
-    /// No authorization is required because metadata is informational only and
-    /// is expected to be set by the deployer immediately after deployment.
+    /// Requires admin authorization (`initialize` must have been called first).
+    /// Returns `NotInitialized` if the contract has not been initialized.
+    ///
+    /// This prevents metadata-spoofing: only the admin that called `initialize`
+    /// can record the canonical deployment description and author.
     pub fn set_registry_metadata(
         env: Env,
         description: String,
         author: String,
     ) -> Result<(), MuxBatcherError> {
+        // Fail-closed: require admin auth before checking MetadataAlreadySet so
+        // that unauthenticated callers cannot probe whether metadata has been set.
+        Self::require_admin(&env)?;
         if env.storage().instance().has(&DataKey::Meta) {
             return Err(MuxBatcherError::MetadataAlreadySet);
         }
@@ -1097,8 +1103,11 @@ mod tests {
     #[test]
     fn test_set_and_get_registry_metadata() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
 
         let description = String::from_str(&env, "Multi-operation batching contract");
         let author = String::from_str(&env, "mux-labs");
@@ -1114,8 +1123,11 @@ mod tests {
     #[test]
     fn test_set_registry_metadata_twice_fails() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, MuxBatcher);
         let client = MuxBatcherClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
 
         let description = String::from_str(&env, "Multi-operation batching contract");
         let author = String::from_str(&env, "mux-labs");
@@ -1124,6 +1136,45 @@ mod tests {
         assert!(client
             .try_set_registry_metadata(&description, &author)
             .is_err());
+    }
+
+    #[test]
+    fn test_set_registry_metadata_requires_admin_auth() {
+        // Without mock_all_auths, set_registry_metadata must reject unauthenticated callers.
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        // Seed admin directly (bypassing initialize's own auth check) so only
+        // set_registry_metadata's auth gate is exercised here.
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+        });
+
+        let description = String::from_str(&env, "Multi-operation batching contract");
+        let author = String::from_str(&env, "mux-labs");
+
+        let result = client.try_set_registry_metadata(&description, &author);
+        assert!(
+            result.is_err(),
+            "set_registry_metadata must reject when admin auth is absent"
+        );
+    }
+
+    #[test]
+    fn test_set_registry_metadata_before_initialize_returns_not_initialized() {
+        // Without initialize, set_registry_metadata must return NotInitialized (fail-closed).
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+
+        let description = String::from_str(&env, "Multi-operation batching contract");
+        let author = String::from_str(&env, "mux-labs");
+
+        let result = client.try_set_registry_metadata(&description, &author);
+        assert_eq!(result, Err(Ok(MuxBatcherError::NotInitialized)));
     }
 
     #[test]

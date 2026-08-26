@@ -68,7 +68,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | `submit_batch(ops)` | U | Delegates to `execute_batch` |
 | `estimate_fees(op_count)` | P | Pure computation |
 | `max_batch_size()` | P | Returns constant |
-| `set_registry_metadata(desc, author)` | P | One-time; no auth required |
+| `set_registry_metadata(desc, author)` | A | Admin only; one-time; returns `NotInitialized` if `initialize` was never called, `MetadataAlreadySet` on a second call |
 | `get_registry_metadata()` | P | Read-only |
 | `simulate_batch(caller, ops)` | U | Caller authorizes; no state mutation |
 
