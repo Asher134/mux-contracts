@@ -163,7 +163,7 @@ by a specific actor; public entrypoints are callable by anyone.
 |---|---|---|
 | `initialize(admin)` | A | One-time setup |
 | `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
-| `set_policy(account, asset, limit, period_ledgers)` | A | Admin only; resets `spent` to 0 |
+| `set_policy(account, asset, limit, period_ledgers)` | A | Admin only; resets `spent` to 0; `InvalidInput` if `limit <= 0`, `InvalidPeriod` if `period_ledgers == 0` (auth checked first — fail-closed) |
 | `get_policy(account, asset)` | P | Read-only |
 | `check_spend(account, asset, amount)` | P | Read-only; no state mutation |
 

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
-- `CONTRIBUTING.md` example called a nonexistent `is_session_key_valid` entrypoint; replaced with a real `register_session_key` + `execute_with_session` example (#700)
+- `mux-spending-policy::set_policy` accepted `period_ledgers == 0`, which would create a policy with a non-advancing period window and made the `InvalidPeriod` error variant unreachable; it now rejects zero periods with `InvalidPeriod` after the admin auth gate (fail-closed: auth before validation), matching `mux-account::set_spend_limit` and `mux-policy::set_daily_limit`
 - `.github/workflows/deploy.yml` set the `DEPLOYER_SECRET_KEY` env var but `scripts/deploy.sh` reads `DEPLOYER_PRIVATE_KEY`, so the deploy workflow always ran with an unset key; renamed for consistency across the workflow and all deployer-key docs (#702)
 - `docs/architecture-overview.md` was missing `mux-policy` and `mux-spending-policy` from the contract list and diagram; added both and marked `Somzilla.md` as a non-canonical scratch note (#701)
 
