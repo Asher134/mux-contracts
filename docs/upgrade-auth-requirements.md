@@ -29,15 +29,15 @@ This document defines the authentication requirements for upgrading Mux Protocol
 | Contract | Has `upgrade()` | Auth pattern | Notes |
 |----------|----------------|--------------|-------|
 | `mux-account` | Not yet | N/A (immutable) | Deployment is currently immutable; upgrade path documented but entry point not exposed |
-| `mux-account-factory` | Not yet | N/A (immutable) | No on-chain upgrade entry point |
+| `mux-account-factory` | **Yes** | `DataKey::Admin` → `require_auth()` | Admin is optional — set via `initialize(admin)`; a factory never initialized has no `upgrade()` path (`NotInitialized`). Account registration itself never required an admin. |
 | `mux-batcher` | **Yes** | `require_admin()` → `require_auth()` | Admin is optional — set via `initialize(admin)`; a batcher never initialized has no `upgrade()` path (`NotInitialized`). Batching itself never required an admin. See [batcher-upgrade.md](batcher-upgrade.md) |
 | `mux-delegation` | **Yes** | `require_admin()` → `require_auth()` | Admin is optional — set via `initialize(admin)`; independent of the caller-supplied `admin` param on `link_contract_id`. See [delegation-upgrade.md](delegation-upgrade.md) |
 | `mux-permissions` | **Yes** | `require_admin()` → `require_auth()` | Reuses the same `DataKey::Admin` / `require_admin()` used by role and multisig-rotation entrypoints. See [permissions-upgrade-migration.md](permissions-upgrade-migration.md) |
 | `mux-policy` | **Yes** | `require_admin()` → `require_auth()` | Admin is set at `initialize()` time (mandatory) |
-| `mux-recovery` | Not yet | N/A (immutable) | Recovery timelock is time-critical; upgrade path requires careful design |
-| `mux-registry` | Not yet | N/A (immutable) | See [contract-upgrade-pattern.md](contract-upgrade-pattern.md) |
-| `mux-spending-policy` | Not yet | N/A (immutable) | No on-chain upgrade entry point |
-| `mux-wallet-registry` | Not yet | N/A (immutable) | See [contract-upgrade-pattern.md](contract-upgrade-pattern.md) |
+| `mux-recovery` | **Yes** | `require_owner()` → `require_auth()` | Gated by the stored `DataKey::Owner`; `NotInitialized` if `initialize` was never called. Upgrade should not be performed while a `Pending` recovery is in flight. |
+| `mux-registry` | **Yes** | `require_admin()` → `require_auth()` | Admin is set at `initialize()` time (mandatory). Instance storage (names, versions, metadata) is preserved across upgrades. |
+| `mux-spending-policy` | **Yes** | `require_admin()` → `require_auth()` | Admin is set at `initialize()` time (mandatory). Instance storage (all policy records) is preserved across upgrades. |
+| `mux-wallet-registry` | **Yes** | `require_owner()` → `require_auth()` | Gated by the stored `DataKey::Owner`; `NotInitialized` if `initialize` was never called. Instance storage (owner, wallet entries, names list) is preserved across upgrades. |
 
 ---
 
