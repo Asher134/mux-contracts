@@ -290,7 +290,7 @@ Contract tag: `mux_recv`
 | `init` | `initialize` succeeds | `owner: Address` |
 | `rec_init` | `initiate_recovery` succeeds | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
 | `rec_exec` | `execute_recovery` succeeds | `(guardian: Address, new_owner: Address)` |
-| `rec_adm` | `approve_recovery_admin` succeeds | `new_owner: Address` |
+| `rec_adm` | `approve_recovery_admin` succeeds | `(new_owner: Address, co_guardian: Address)` |
 | `rec_cncl` | `cancel_recovery` succeeds | `()` |
 | `grd_add` | `add_guardian` succeeds | `guardian: Address` |
 | `grd_rm` | `remove_guardian` succeeds | `guardian: Address` |

@@ -122,7 +122,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | `initiate_recovery(guardian, new_owner)` | U | Guardian authorizes; rejects if a non-expired recovery is already pending |
 | `cancel_recovery()` | U | Owner authorizes |
 | `execute_recovery(guardian)` | U | Guardian authorizes; timelock and expiry check |
-| `approve_recovery_admin()` | U | Owner authorizes; executes a pending recovery immediately, bypassing the timelock |
+| `approve_recovery_admin(co_guardian)` | U | Owner **and** a registered guardian co-sign; executes a pending recovery immediately, bypassing the timelock; requires both `owner.require_auth()` and `co_guardian.require_auth()` + guardian-membership check |
 | `add_guardian(guardian)` | U | Owner authorizes; capped at `MAX_GUARDIANS` |
 | `remove_guardian(guardian)` | U | Owner authorizes; rejects if it would leave zero guardians |
 | `owner()` | P | Read-only |

@@ -86,7 +86,7 @@ Legend:
 - [ ] `initiate_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
 - [ ] `cancel_recovery` — `require_owner` helper called; only current owner can cancel.
 - [ ] `execute_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
-- [ ] `approve_recovery_admin` — `require_owner` helper called; lets the owner bypass the timelock for a pending recovery.
+- [ ] `approve_recovery_admin` — `require_owner` helper called **and** `co_guardian.require_auth()` + `require_guardian` called; both the owner and a registered guardian must co-sign to bypass the timelock — owner alone cannot execute the fast path.
 - [ ] `add_guardian` / `remove_guardian` — `require_owner` helper called; `remove_guardian` additionally rejects removing the last guardian.
 - [ ] `set_registry` — `owner.require_auth()` called.
 - [ ] No recovery mutation is possible without guardian or owner authorization.

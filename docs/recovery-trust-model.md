@@ -114,6 +114,7 @@ Every state mutation emits a structured event under the `mux_recv` contract tag.
 | `initiate_recovery` | `rec_init` | `(guardian: Address, new_owner: Address)` |
 | `execute_recovery` | `rec_exec` | `(guardian: Address, new_owner: Address)` |
 | `cancel_recovery` | `rec_cncl` | `()` |
+| `approve_recovery_admin` | `rec_adm` | `(new_owner: Address, co_guardian: Address)` |
 | `set_registry` | `reg_link` | `registry_id: Address` |
 | `recovery_request` | _(read-only)_ | Returns the full `RecoveryRequest` struct, no event emitted |
 
@@ -169,6 +170,7 @@ This entrypoint is read-only (no event emitted) and is designed primarily for of
 | Attacker spams recovery requests | Only one Pending request allowed; each requires guardian auth |
 | Replay of old recovery request | Each request stores `initiated_at`; executed/cancelled requests cannot be re-executed |
 | Owner tries to remove guardians | Guardian set is immutable after `initialize` |
+| Compromised owner bypasses 24 h timelock via `approve_recovery_admin` | `approve_recovery_admin` now requires **both** owner auth and a registered guardian co-sign; a compromised owner key alone cannot execute the fast path |
 | Malicious registry link | `set_registry` requires owner auth; `reg_link` event provides on-chain audit trail |
 
 ---
