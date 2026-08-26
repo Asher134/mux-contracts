@@ -81,6 +81,36 @@ fn require_admin(env: &Env) -> Result<(), ContractError> {
 
 ---
 
+## Automated preflight checks
+
+The items below are enforced automatically. Run before every production upgrade:
+
+```bash
+bash scripts/check-upgrade-preflight.sh --fix-report
+```
+
+The script exits non-zero if any check fails and prints a per-check
+remediation hint when `--fix-report` is supplied.
+
+| Check | What is verified | Automated? |
+|-------|-----------------|-----------|
+| No `panic!()` on shipped paths | Every `.rs` file under `contracts/` (outside `#[cfg(test)]`) contains no bare `panic!()` | ✅ Script + Rust test |
+| No `todo!()` on shipped paths | Same files contain no `todo!()` stubs | ✅ Script + Rust test |
+| `upgrade()` auth gate | Every `pub fn upgrade` in the workspace calls `require_admin`/`require_auth` before `update_current_contract_wasm` | ✅ Script + Rust test |
+| `pause`/`unpause` auth | `pause()` and `unpause()` contain an owner-auth call | ✅ Rust test |
+| WASM hash tooling present | `scripts/verify-wasm-hash.sh` and `scripts/compute-wasm-hashes.sh` exist and are executable | ✅ Script |
+| Rollback log enforcement | `scripts/check-rollback-log.sh` exists | ✅ Script |
+| Auth requirements doc present | `docs/upgrade-auth-requirements.md` is non-empty | ✅ Script |
+| Access control checklist present | `docs/access-control-checklist.md` exists | ✅ Script |
+| Entrypoint matrix present | `docs/entrypoint-matrix.md` exists | ✅ Script |
+
+The Rust-level checks live in `tests/upgrade_preflight.rs` and run as part of
+`cargo test --workspace`. The shell script (`scripts/check-upgrade-preflight.sh`)
+additionally verifies filesystem artifacts and is intended for the CI pre-deploy
+job.
+
+---
+
 ## Pre-upgrade checklist
 
 Before every production upgrade:
