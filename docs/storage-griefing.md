@@ -243,6 +243,11 @@ Every collection cap has dedicated unit tests that verify the `TooMany*` error p
 | `mux-account-factory` | `test_accounts_vec_length_bounded_after_cap` | Accounts vec length stays ≤ 64 after a rejected deploy |
 | `mux-account-factory` | `test_account_count_does_not_increment_on_rejected_deploy` | Global counter does not increase when cap is rejected |
 | `mux-account-factory` | `test_max_accounts_per_owner_returns_64` | Public `max_accounts_per_owner` entrypoint returns 64 |
+| `mux-account-factory` | `test_concurrent_deploy_respects_cap` | Simulated concurrent deploys by same owner respect cap (#689) |
+| `mux-account-factory` | `test_concurrent_deploys_across_owners_isolated` | Concurrent deploys from different owners don't interfere (#689) |
+| `mux-account-factory` | `test_owner_enumeration_at_cap` | Full enumeration of 64 accounts with mixed metadata (#689) |
+| `mux-account-factory` | `test_cap_griefing_resistance` | Attacker filling own cap doesn't affect victim's deploys (#689) |
+| `mux-account-factory` | `test_enumeration_with_duplicate_addresses` | Duplicate address deploys don't break enumeration (#689) |
 | `mux-account-factory` | `test_metadata_version_too_long` | Version string > 32 chars returns `MetadataTooLarge` |
 | `mux-account-factory` | `test_metadata_description_too_long` | Description string > 256 chars returns `MetadataTooLarge` |
 | `mux-account-factory` | `test_metadata_author_too_long` | Author string > 64 chars returns `MetadataTooLarge` |

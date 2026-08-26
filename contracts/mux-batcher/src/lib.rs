@@ -206,6 +206,8 @@ impl MuxBatcher {
     /// If any operation has `require_success = true` and fails, returns
     /// `Err(RequiredOperationFailed)` and emits a `bat_abort` event.
     ///
+    /// # Reentrancy Guard (#690)
+    ///
     /// The reentrancy guard (`DataKey::Executing`) is set immediately after the
     /// size checks pass and is **always** removed before this function returns,
     /// regardless of outcome:
@@ -213,6 +215,11 @@ impl MuxBatcher {
     /// - Cleared before returning `Err(RequiredOperationFailed)` on the abort path.
     /// Note: `Err(EmptyBatch)` and `Err(BatchTooLarge)` return before the guard
     /// is ever set, so no cleanup is needed on those paths.
+    ///
+    /// This ensures that:
+    /// 1. Batched operations cannot recursively call `execute_batch` (reentrancy is blocked).
+    /// 2. Subsequent calls in the same session succeed (guard is cleared after each call).
+    /// 3. The guard is cleared even when required operations fail (abort path cleanup).
     ///
     /// Emits (in order):
     /// - `bat_start` — immediately after size checks pass, before any operations run

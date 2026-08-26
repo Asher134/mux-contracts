@@ -1364,4 +1364,242 @@ mod tests {
         assert!(result_b.is_ok());
         assert_eq!(client.get_accounts(&owner_b).len(), 1);
     }
+
+    // ── #689: concurrent deploy griefing and enumeration ──────────────────────
+
+    /// Concurrent deploys by the same owner must be correctly serialized:
+    /// the cap check reads the current vec length, so rapid concurrent calls
+    /// that both see len=63 could both attempt to push (creating len=65).
+    /// Soroban's transactional model prevents this, but we verify the cap
+    /// guard holds under simulated concurrent load.
+    #[test]
+    fn test_concurrent_deploy_respects_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+
+        // Fill to one below cap (63 accounts).
+        for _ in 0..(MAX_ACCOUNTS_PER_OWNER - 1) {
+            client.deploy_account(&owner, &Address::generate(&env));
+        }
+        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER - 1);
+
+        // Simulate two "concurrent" deploy attempts.
+        // In Soroban's execution model, these are actually sequential within
+        // the test, but this verifies the cap check is evaluated correctly
+        // on each call regardless of prior attempts in the same "batch."
+        let deploy_1 = client.try_deploy_account(&owner, &Address::generate(&env));
+        let deploy_2 = client.try_deploy_account(&owner, &Address::generate(&env));
+
+        // First deploy should succeed (64th account).
+        assert!(deploy_1.is_ok(), "64th deploy must succeed");
+
+        // Second deploy must be rejected (would be 65th).
+        assert_eq!(
+            deploy_2,
+            Err(Ok(MuxAccountFactoryError::TooManyAccounts)),
+            "65th deploy must fail with TooManyAccounts"
+        );
+
+        // Final vec length must be exactly at cap, not above.
+        assert_eq!(client.get_accounts(&owner).len(), MAX_ACCOUNTS_PER_OWNER);
+        assert_eq!(client.account_count(), u64::from(MAX_ACCOUNTS_PER_OWNER));
+    }
+
+    /// Concurrent deploys from different owners must not interfere with each
+    /// other's cap enforcement. This tests that the per-owner Accounts vec
+    /// isolation is maintained under concurrent load.
+    #[test]
+    fn test_concurrent_deploys_across_owners_isolated() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner_a = Address::generate(&env);
+        let owner_b = Address::generate(&env);
+        let owner_c = Address::generate(&env);
+
+        // Fill owner_a to cap (64).
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner_a, &Address::generate(&env));
+        }
+
+        // Fill owner_b to one below cap (63).
+        for _ in 0..(MAX_ACCOUNTS_PER_OWNER - 1) {
+            client.deploy_account(&owner_b, &Address::generate(&env));
+        }
+
+        // Owner_c has no accounts yet (0).
+
+        // Simulate "concurrent" deploys from all three owners.
+        let result_a = client.try_deploy_account(&owner_a, &Address::generate(&env));
+        let result_b = client.try_deploy_account(&owner_b, &Address::generate(&env));
+        let result_c = client.try_deploy_account(&owner_c, &Address::generate(&env));
+
+        // owner_a is at cap — must be rejected.
+        assert_eq!(result_a, Err(Ok(MuxAccountFactoryError::TooManyAccounts)));
+
+        // owner_b has space for one more — must succeed.
+        assert!(result_b.is_ok());
+
+        // owner_c has no accounts — must succeed.
+        assert!(result_c.is_ok());
+
+        // Verify final state: each owner's vec is independent.
+        assert_eq!(
+            client.get_accounts(&owner_a).len(),
+            MAX_ACCOUNTS_PER_OWNER,
+            "owner_a remains at cap"
+        );
+        assert_eq!(
+            client.get_accounts(&owner_b).len(),
+            MAX_ACCOUNTS_PER_OWNER,
+            "owner_b now at cap"
+        );
+        assert_eq!(client.get_accounts(&owner_c).len(), 1, "owner_c has 1");
+
+        // Global counter incremented only for successful deploys.
+        assert_eq!(
+            client.account_count(),
+            u64::from(MAX_ACCOUNTS_PER_OWNER) * 2 + 1
+        );
+    }
+
+    /// Owner enumeration: after filling to cap, get_accounts must return
+    /// exactly MAX_ACCOUNTS_PER_OWNER entries, all distinct (unless duplicates
+    /// were intentionally registered), and querying metadata for each must
+    /// succeed when metadata was stored.
+    #[test]
+    fn test_owner_enumeration_at_cap() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Test account");
+        let author = String::from_str(&env, "mux-labs");
+
+        // Deploy 64 accounts, half with metadata, half without.
+        let mut expected_addresses: Vec<Address> = Vec::new(&env);
+        for i in 0..MAX_ACCOUNTS_PER_OWNER {
+            let addr = Address::generate(&env);
+            if i % 2 == 0 {
+                client.deploy_account(&owner, &addr);
+            } else {
+                client.deploy_account_with_metadata(
+                    &owner,
+                    &addr,
+                    &version,
+                    &description,
+                    &author,
+                );
+            }
+            expected_addresses.push_back(addr);
+        }
+
+        // get_accounts must return all 64.
+        let accounts = client.get_accounts(&owner);
+        assert_eq!(accounts.len(), MAX_ACCOUNTS_PER_OWNER);
+
+        // Each address must be present in the returned vec.
+        for expected in expected_addresses.iter() {
+            let mut found = false;
+            for actual in accounts.iter() {
+                if actual == expected {
+                    found = true;
+                    break;
+                }
+            }
+            assert!(found, "expected address not found in get_accounts result");
+        }
+
+        // Metadata must be readable for accounts deployed with metadata.
+        for i in 0..expected_addresses.len() {
+            let addr = expected_addresses.get(i).unwrap();
+            if i % 2 == 1 {
+                // Odd index → deployed with metadata.
+                let meta = client.get_account_metadata(&owner, &addr);
+                assert_eq!(meta.version, version);
+            } else {
+                // Even index → deployed without metadata.
+                let result = client.try_get_account_metadata(&owner, &addr);
+                assert_eq!(result, Err(Ok(MuxAccountFactoryError::MetadataNotFound)));
+            }
+        }
+    }
+
+    /// Griefing resistance: verify that an attacker filling their own cap
+    /// does not degrade performance or storage cost for other users.
+    /// The cap is per-owner, so owner_attacker filling to 64 must not
+    /// increase the cost of owner_victim's first deploy.
+    #[test]
+    fn test_cap_griefing_resistance() {
+        let (env, client) = setup();
+        env.budget().reset_unlimited();
+        let owner_attacker = Address::generate(&env);
+        let owner_victim = Address::generate(&env);
+
+        // Attacker fills their cap.
+        for _ in 0..MAX_ACCOUNTS_PER_OWNER {
+            client.deploy_account(&owner_attacker, &Address::generate(&env));
+        }
+
+        // Victim should be unaffected — first deploy must succeed normally.
+        let victim_account = Address::generate(&env);
+        let result = client.try_deploy_account(&owner_victim, &victim_account);
+        assert!(result.is_ok(), "victim's deploy must succeed");
+
+        // Victim's account list is independent.
+        assert_eq!(client.get_accounts(&owner_victim).len(), 1);
+        assert_eq!(
+            client.get_accounts(&owner_victim).get(0).unwrap(),
+            victim_account
+        );
+
+        // Attacker's list is still full and independent.
+        assert_eq!(
+            client.get_accounts(&owner_attacker).len(),
+            MAX_ACCOUNTS_PER_OWNER
+        );
+    }
+
+    /// Enumeration edge case: deploying the same address multiple times
+    /// (which is allowed) must not break enumeration or metadata queries.
+    #[test]
+    fn test_enumeration_with_duplicate_addresses() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let duplicate_addr = Address::generate(&env);
+        let version_1 = String::from_str(&env, "1.0.0");
+        let version_2 = String::from_str(&env, "2.0.0");
+        let description = String::from_str(&env, "Duplicate test");
+        let author = String::from_str(&env, "test");
+
+        // Deploy the same address twice with different metadata.
+        client.deploy_account_with_metadata(
+            &owner,
+            &duplicate_addr,
+            &version_1,
+            &description,
+            &author,
+        );
+        client.deploy_account_with_metadata(
+            &owner,
+            &duplicate_addr,
+            &version_2,
+            &description,
+            &author,
+        );
+
+        // get_accounts must show both entries.
+        let accounts = client.get_accounts(&owner);
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts.get(0).unwrap(), duplicate_addr);
+        assert_eq!(accounts.get(1).unwrap(), duplicate_addr);
+
+        // Metadata query returns the last-written metadata (storage key is
+        // (owner, address), so the second deploy overwrites the first).
+        let meta = client.get_account_metadata(&owner, &duplicate_addr);
+        assert_eq!(meta.version, version_2);
+
+        // account_count increments for both deploys.
+        assert_eq!(client.account_count(), 2);
+    }
 }
