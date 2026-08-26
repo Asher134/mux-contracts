@@ -35,6 +35,7 @@ Contract tag: `mux_acct`
 | Action | Trigger | Data payload |
 |---|---|---|
 | `init` | `initialize` succeeds | `owner: Address` |
+| `paused` | `pause` succeeds | `()` |
 | `unpaused` | `unpause` succeeds | `()` |
 | `dlg_set` | `set_delegate` succeeds | `(delegate: Address, expires_at: u64, can_spend: bool)`; `expires_at` is a Unix timestamp |
 | `dlg_rm` | `remove_delegate` succeeds | `delegate: Address` |
