@@ -40,9 +40,17 @@ Contract tag: `mux_acct`
 | `dlg_rm` | `remove_delegate` succeeds | `delegate: Address` |
 | `lmt_set` | `set_spend_limit` succeeds | `(asset: Address, amount: i128, period_ledgers: u32)` |
 | `debited` | `debit_spend` succeeds | `(asset: Address, spend: i128)` |
+| `executed` | `execute` succeeds | `(target: Address, asset: Address, spend: i128)` |
 | `ses_exe` | `execute_with_session` succeeds | `SessionExecutedEvent { session_key: Address, payload_len: u32 }` |
 | `meta_set` | `set_metadata` succeeds | `name: String` (from the `RegistryMeta` argument) |
 
+> `execute` follows checks-effects-interactions: the spend limit is checked
+> before `target` is invoked, but the debit is written to storage — and the
+> `executed` event emitted — only after the invocation returns. The
+> reentrancy guard (`DataKey::Executing`) is held for the full duration of
+> the invocation, not just around the storage write, so a callback into
+> `execute`/`debit_spend` from `target` during the call is rejected.
+>
 > `register_session_key` and `revoke_session_key` do not currently emit
 > dedicated audit events.
 
@@ -123,12 +131,15 @@ Contract tag: `mux_perm`
 | `adm_apr` | `approve_admin` records an approval (threshold not yet reached) | `(approver: Address, new_admin: Address)` |
 | `adm_prm` | `approve_admin` promotes a candidate (threshold reached) | `new_admin: Address` |
 | `perm_ok` | `has_permission` returns `true` | `(account: Address, permission: Symbol)` |
-| `perm_den` | `has_permission` returns `false` | `(account: Address, permission: Symbol)` |
 | `meta_set` | `set_metadata` succeeds | `name: String` (from the `RegistryMeta` argument) |
 
-> Unlike every other event in this table, `perm_ok`/`perm_den` are emitted by
-> a read-only query (`has_permission`), not a state-mutating call — every
-> permission check is itself audit-logged.
+> Unlike every other event in this table, `perm_ok` is emitted by a read-only
+> query (`has_permission`), not a state-mutating call — a granted permission
+> check is itself audit-logged. A **denied** check (`has_permission` returns
+> `false`) emits nothing: `has_permission` takes no auth, so any caller could
+> otherwise spam an arbitrary account's audit log with `perm_den` events for
+> permissions it never held, and it would violate the read-only-entrypoints
+> rule in [event-topic-conventions.md](event-topic-conventions.md).
 
 > `upgrade` emits no event — instance storage (including this event log's
 > continuity) survives the WASM replace, so there is nothing new to log; the

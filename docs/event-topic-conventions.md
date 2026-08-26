@@ -51,13 +51,16 @@ Tags are snake-ish abbreviations under 9 chars. Do not reuse a tag across crates
 |---|---|---|
 | Verb-ish past / short noun | `init`, `deployed`, `executed` | One-shot lifecycle |
 | Domain prefix + verb | `dlg_set`, `dlg_rm`, `role_grt` | Domain-scoped mutations |
-| Status / outcome | `bat_ok`, `bat_abort`, `perm_den` | Secondary outcome beside a primary event |
+| Status / outcome | `bat_ok`, `bat_abort` | Secondary outcome beside a primary event |
 
 Guidelines:
 
 - Prefer ≤ 8 characters so `symbol_short!` stays readable.
 - Keep action names unique **within** a contract tag; cross-contract reuse of names like `init` / `meta_set` is fine.
 - Read-only entrypoints (`get_*`, `simulate_*`, `is_*`, `has_*`) emit **no** events.
+  Exception: `mux-permissions::has_permission` emits `perm_ok` on a granted
+  check (a positive audit trail is intentional there) but emits nothing on a
+  denial — see [audit-events.md](audit-events.md#mux-permissions-events).
 
 ## Data payload
 

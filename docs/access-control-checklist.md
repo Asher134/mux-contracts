@@ -28,6 +28,10 @@ Legend:
 - [ ] `remove_delegate` — `require_owner` helper called.
 - [ ] `set_spend_limit` — `require_owner` helper called.
 - [ ] `debit_spend` — `current_contract_address().require_auth()` called (contract-internal only).
+- [ ] `execute` — `require_owner` helper called; spend limit is checked and the
+      reentrancy guard acquired before `target` is invoked, but the debit is
+      only written to storage — and the guard only released — after
+      `invoke_contract` returns (checks-effects-interactions; see §5.2).
 - [ ] `register_session_key` / `revoke_session_key` — `require_owner` helper called.
 - [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`).
 - [ ] `set_metadata` — `require_owner` helper called.
@@ -174,6 +178,46 @@ The `execute_batch` function implements a reentrancy guard using `DataKey::Execu
 - [x] Guard lifecycle documented in `execute_batch` function doc comment
 - [x] This checklist section (#690)
 
+### 5.2 Reentrancy Guard — `mux-account` `execute()`
+
+`execute()` invokes an arbitrary `target` contract on the owner's behalf while
+accounting for an asset spend. The invoked target can call back into the
+account contract during that invocation, so the reentrancy guard
+(`DataKey::Executing`) must cover the invocation itself, not just the spend
+bookkeeping around it.
+
+**Guard lifecycle (checks-effects-interactions):**
+1. **Check** — spend is validated against the configured `SpendLimit` (read
+   only; no storage write) before the guard is even considered.
+2. **Set** — the guard is acquired immediately after the check passes, before
+   `target` is invoked.
+3. **Interaction** — `target` is invoked (`env.invoke_contract`) while the
+   guard is held.
+4. **Effect** — the debit is written to `SpendLimit` storage only after the
+   invocation returns.
+5. **Cleared** — on every exit path: after a successful invocation, and on
+   the `SpendLimitExceeded` / `InvalidAmount` / `ArithmeticOverflow`
+   rejection paths (a contract-level `Err` return does not auto-rollback
+   storage on Soroban, so a guard left set on a rejection would permanently
+   lock the account out of `execute()` and `debit_spend()`).
+
+**Previously**: the debit was written and the guard cleared *before*
+`target` was invoked, so the guard covered the bookkeeping but not the actual
+cross-contract call — a callback from `target` into `execute()` or
+`debit_spend()` during the invocation was not caught. Ordering now follows
+invoke-then-debit: the interaction happens first, the effect (and guard
+release) after.
+
+**Test coverage** (`contracts/mux-account/src/lib.rs`):
+- [x] `test_execute_holds_reentrancy_guard_across_invocation` — a target that
+      calls back into `debit_spend` mid-`execute()` is rejected with
+      `ReentrancyDetected`; the outer spend is recorded exactly once.
+- [x] `test_execute_spend_limit_rejection_does_not_lock_out_future_calls` —
+      after a `SpendLimitExceeded` rejection, a subsequent within-limit
+      `execute()` call still succeeds (guard was released).
+- [x] `test_debit_spend_rejection_does_not_lock_out_future_calls` — same
+      guarantee for the `debit_spend` entrypoint.
+
 ---
 
 ## 6. Storage Isolation
@@ -239,7 +283,7 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 
 ## 8. Unit Test Coverage
 
-- [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period.
+- [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period, `execute()` reentrancy guard held across invocation (§5.2), guard released on rejection paths.
 - [ ] `mux-batcher`: empty batch, oversized batch, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection.
