@@ -254,6 +254,14 @@ impl MuxPermissions {
     }
 
     /// Check whether an account has a specific permission through any of its roles.
+    ///
+    /// A grant (`true`) emits `perm_ok` for the audit trail. A denial (`false`)
+    /// emits **no** event: this is a read-only entrypoint, and per
+    /// `docs/event-topic-conventions.md` read-only entrypoints (`has_*`, `get_*`,
+    /// `is_*`, `simulate_*`) must not have on-chain side effects. Emitting on
+    /// every denial would also let any caller — unauthenticated, since this
+    /// function requires no auth — spam an arbitrary account's audit log with
+    /// `perm_den` events for permissions it never held.
     pub fn has_permission(env: Env, account: Address, permission: Symbol) -> bool {
         let account_roles: Vec<Symbol> = env
             .storage()
@@ -272,7 +280,6 @@ impl MuxPermissions {
                 return true;
             }
         }
-        emit(&env, symbol_short!("perm_den"), (account, permission));
         false
     }
 
@@ -611,6 +618,55 @@ mod tests {
         assert!(client.has_permission(&user, &transfer_perm));
         let roles = client.get_roles(&user);
         assert!(roles.contains(&role));
+    }
+
+    // ── has_permission emits no event on denial ─────────────────────────────
+
+    #[test]
+    fn test_has_permission_denial_emits_no_event() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let perm = symbol_short!("transfer");
+
+        // Only `init` (from setup) has been emitted so far.
+        let events_before = env.events().all();
+        assert_eq!(events_before.len(), 1);
+
+        assert!(!client.has_permission(&user, &perm));
+
+        // has_permission is read-only; a denial must not append any event
+        // (docs/event-topic-conventions.md: read-only entrypoints emit none).
+        let events_after = env.events().all();
+        assert_eq!(
+            events_after.len(),
+            1,
+            "has_permission returning false must not emit perm_den"
+        );
+    }
+
+    #[test]
+    fn test_has_permission_grant_still_emits_perm_ok() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let role = symbol_short!("editor");
+        let perm = symbol_short!("write");
+        let mut perms: Vec<Symbol> = Vec::new(&env);
+        perms.push_back(perm.clone());
+
+        client.create_role(&role, &perms);
+        client.grant_role(&user, &role);
+
+        // init + role_crt + role_grt = 3 events so far.
+        let events_before = env.events().all();
+        assert_eq!(events_before.len(), 3);
+
+        assert!(client.has_permission(&user, &perm));
+
+        // A successful (granted) check still emits perm_ok — only the denial
+        // path was silenced.
+        let events_after = env.events().all();
+        assert_eq!(events_after.len(), 4);
+        assert_eq!(topic_action(&env, &events_after, 3), symbol_short!("perm_ok"));
     }
 
     #[test]
@@ -1208,15 +1264,14 @@ mod integration_tests {
         let _role_grt = symbol_short!("role_grt");
         let _role_rev = symbol_short!("role_rev");
         let _perm_ok = symbol_short!("perm_ok");
-        let _perm_den = symbol_short!("perm_den");
         let _adm_thr = symbol_short!("adm_thr");
         let _adm_prp = symbol_short!("adm_prp");
         let _adm_apr = symbol_short!("adm_apr");
         let _adm_prm = symbol_short!("adm_prm");
         let _meta_set = symbol_short!("meta_set");
         core::mem::drop((
-            _tag, _init, _role_crt, _role_grt, _role_rev, _perm_ok, _perm_den, _adm_thr, _adm_prp,
-            _adm_apr, _adm_prm, _meta_set,
+            _tag, _init, _role_crt, _role_grt, _role_rev, _perm_ok, _adm_thr, _adm_prp, _adm_apr,
+            _adm_prm, _meta_set,
         ));
     }
 }

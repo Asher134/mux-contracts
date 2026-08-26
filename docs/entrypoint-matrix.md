@@ -29,6 +29,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | `remove_delegate(delegate)` | A | Owner only; paused check |
 | `set_spend_limit(asset, amount, period)` | A | Owner only; paused check |
 | `debit_spend(asset, spend)` | U | Caller (contract) authorizes; paused check; reentrancy guard |
+| `execute(target, function, args, asset, spend)` | A | Owner only; paused check; validates spend limit, then invokes `target` while the reentrancy guard is held, then persists the debit (checks-effects-interactions) |
 | `owner()` | P | Read-only |
 | `delegates()` | P | Read-only; filters expired |
 | `get_delegate(delegate)` | P | Read-only |
@@ -92,7 +93,7 @@ by a specific actor; public entrypoints are callable by anyone.
 | `create_role(role, perms)` | A | Admin only |
 | `grant_role(account, role)` | A | Admin only |
 | `revoke_role(account, role)` | A | Admin only |
-| `has_permission(account, perm)` | P | Read-only; emits audit events |
+| `has_permission(account, perm)` | P | Read-only; emits `perm_ok` on grant only, nothing on denial |
 | `get_roles(account)` | P | Read-only |
 | `get_role_members(role)` | P | Read-only |
 | `set_admin_threshold(threshold)` | A | Admin only |

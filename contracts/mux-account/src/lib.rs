@@ -348,7 +348,16 @@ impl MuxAccount {
         Ok(())
     }
 
-    /// Execute a contract call and account for its asset spend atomically.
+    /// Execute a contract call and account for its asset spend.
+    ///
+    /// Follows checks-effects-interactions: the spend limit is validated up
+    /// front without writing storage (check), the target is invoked while the
+    /// reentrancy guard is held (interaction), and the debit is written to
+    /// storage only after the invocation returns (effect). Holding the guard
+    /// across `invoke_contract` — rather than releasing it beforehand — is
+    /// what makes it actually cover the cross-contract call: a callback into
+    /// `execute()` or `debit_spend()` from the invoked target during this
+    /// window is rejected with `ReentrancyDetected`.
     pub fn execute(
         env: Env,
         target: Address,
@@ -359,28 +368,41 @@ impl MuxAccount {
     ) -> Result<Val, MuxAccountError> {
         Self::require_not_paused(&env)?;
         Self::require_owner(&env)?;
-        Self::apply_spend(&env, &asset, spend)?;
+
+        Self::acquire_guard(&env)?;
+        let limit = match Self::compute_spend_update(&env, &asset, spend) {
+            Ok(limit) => limit,
+            Err(e) => {
+                Self::release_guard(&env);
+                return Err(e);
+            }
+        };
+
+        // Interaction: guard is held for the duration of the external call.
         let result = env.invoke_contract::<Val>(&target, &function, args);
+
+        // Effect: the debit is only persisted after the interaction returns.
+        env.storage()
+            .instance()
+            .set(&DataKey::SpendLimit(asset.clone()), &limit);
+        Self::release_guard(&env);
+
         emit(&env, symbol_short!("executed"), (target, asset, spend));
         Self::extend_ttl(&env);
         Ok(result)
     }
 
-    fn apply_spend(env: &Env, asset: &Address, spend: i128) -> Result<(), MuxAccountError> {
+    /// Validate a spend against the configured limit and return the record it
+    /// would produce, without writing storage. Rolls the period counter over
+    /// if the current ledger has passed `reset_ledger`.
+    fn compute_spend_update(
+        env: &Env,
+        asset: &Address,
+        spend: i128,
+    ) -> Result<SpendLimit, MuxAccountError> {
         if spend <= 0 {
             return Err(MuxAccountError::InvalidAmount);
         }
-        // Reentrancy guard: reject if a debit_spend call is already in progress.
-        // On error return Soroban rolls back storage, so the flag is self-cleaning.
-        if env
-            .storage()
-            .instance()
-            .get::<DataKey, bool>(&DataKey::Executing)
-            .unwrap_or(false)
-        {
-            return Err(MuxAccountError::ReentrancyDetected);
-        }
-        env.storage().instance().set(&DataKey::Executing, &true);
 
         let mut limit: SpendLimit = env
             .storage()
@@ -401,13 +423,44 @@ impl MuxAccount {
             return Err(MuxAccountError::SpendLimitExceeded);
         }
         limit.spent = new_spent;
+        Ok(limit)
+    }
+
+    /// Reject if a call is already in progress; otherwise set the reentrancy
+    /// guard. Callers must release it on every exit path — a contract-level
+    /// `Err` return does not auto-rollback storage on Soroban, so a guard set
+    /// here and never released would permanently lock out `execute()` and
+    /// `debit_spend()`.
+    fn acquire_guard(env: &Env) -> Result<(), MuxAccountError> {
+        if env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::Executing)
+            .unwrap_or(false)
+        {
+            return Err(MuxAccountError::ReentrancyDetected);
+        }
+        env.storage().instance().set(&DataKey::Executing, &true);
+        Ok(())
+    }
+
+    fn release_guard(env: &Env) {
+        env.storage().instance().remove(&DataKey::Executing);
+    }
+
+    fn apply_spend(env: &Env, asset: &Address, spend: i128) -> Result<(), MuxAccountError> {
+        Self::acquire_guard(env)?;
+        let limit = match Self::compute_spend_update(env, asset, spend) {
+            Ok(limit) => limit,
+            Err(e) => {
+                Self::release_guard(env);
+                return Err(e);
+            }
+        };
         env.storage()
             .instance()
             .set(&DataKey::SpendLimit(asset.clone()), &limit);
-
-        // Clear reentrancy guard so subsequent top-level calls succeed.
-        env.storage().instance().remove(&DataKey::Executing);
-
+        Self::release_guard(env);
         Ok(())
     }
 
@@ -636,7 +689,7 @@ mod tests {
     use soroban_sdk::{
         symbol_short,
         testutils::{storage::Instance as _, Address as _, Events, Ledger as _},
-        Env, FromVal, String, Vec,
+        Env, FromVal, IntoVal, String, Vec,
     };
 
     #[contract]
@@ -646,6 +699,27 @@ mod tests {
     impl ExecuteTarget {
         pub fn ping() -> u32 {
             7
+        }
+    }
+
+    /// Test-only contract that, when invoked by `execute()`, attempts to call
+    /// back into the invoking `MuxAccount` instance's `debit_spend` while the
+    /// outer call is still in flight. Returns `true` if the reentrant call was
+    /// rejected (guard held) and `false` if it went through (guard bypassed).
+    #[contract]
+    struct ReentrantTarget;
+
+    #[contractimpl]
+    impl ReentrantTarget {
+        pub fn attack(env: Env, mux_account: Address, asset: Address, spend: i128) -> bool {
+            let args: Vec<Val> =
+                soroban_sdk::vec![&env, asset.into_val(&env), spend.into_val(&env)];
+            let result = env.try_invoke_contract::<soroban_sdk::Val, soroban_sdk::Error>(
+                &mux_account,
+                &symbol_short!("debit_spend"),
+                args,
+            );
+            result.is_err()
         }
     }
 
@@ -991,6 +1065,87 @@ mod tests {
             ),
             Err(Ok(MuxAccountError::SpendLimitExceeded))
         );
+    }
+
+    // ── CEI ordering / reentrancy guard (invoke-then-debit) ─────────────────
+
+    #[test]
+    fn test_execute_holds_reentrancy_guard_across_invocation() {
+        let (env, client, owner, cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &1000_i128, &100_u32);
+
+        let attacker = env.register_contract(None, ReentrantTarget);
+        let attack_args: Vec<Val> = soroban_sdk::vec![
+            &env,
+            cid.clone().into_val(&env),
+            asset.clone().into_val(&env),
+            50_i128.into_val(&env)
+        ];
+
+        let value = client.execute(
+            &attacker,
+            &symbol_short!("attack"),
+            &attack_args,
+            &asset,
+            &50_i128,
+        );
+        assert!(
+            bool::from_val(&env, &value),
+            "a reentrant debit_spend call during execute() must be rejected \
+             with ReentrancyDetected — the guard must be held across invoke_contract, \
+             not released before it (previously the debit was written and the \
+             guard cleared before the target was ever invoked)"
+        );
+
+        // The outer spend must be recorded exactly once — the rejected
+        // reentrant attempt must not have added anything.
+        let recorded: SpendLimit = env.as_contract(&cid, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::SpendLimit(asset.clone()))
+                .unwrap()
+        });
+        assert_eq!(recorded.spent, 50_i128);
+    }
+
+    #[test]
+    fn test_execute_spend_limit_rejection_does_not_lock_out_future_calls() {
+        // A contract-level Err return does not auto-rollback storage on
+        // Soroban, so if the reentrancy guard were left set on a
+        // SpendLimitExceeded rejection, every subsequent execute()/
+        // debit_spend() call would permanently fail with ReentrancyDetected.
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &100_i128, &100_u32);
+        let target = env.register_contract(None, ExecuteTarget);
+        let args = Vec::new(&env);
+
+        let rejected =
+            client.try_execute(&target, &symbol_short!("ping"), &args, &asset, &500_i128);
+        assert_eq!(rejected, Err(Ok(MuxAccountError::SpendLimitExceeded)));
+
+        // The guard must have been released on that failure path — a
+        // within-limit call right after must succeed, not hit
+        // ReentrancyDetected.
+        let value = client.execute(&target, &symbol_short!("ping"), &args, &asset, &40_i128);
+        assert_eq!(u32::from_val(&env, &value), 7);
+    }
+
+    #[test]
+    fn test_debit_spend_rejection_does_not_lock_out_future_calls() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let asset = Address::generate(&env);
+        client.set_spend_limit(&asset, &100_i128, &100_u32);
+
+        let rejected = client.try_debit_spend(&asset, &500_i128);
+        assert_eq!(rejected, Err(Ok(MuxAccountError::SpendLimitExceeded)));
+
+        // Guard must be released on the rejection path.
+        assert!(client.try_debit_spend(&asset, &40_i128).is_ok());
     }
 
     #[test]
