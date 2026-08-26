@@ -70,10 +70,12 @@ missing. Contract validation failures use `MuxAccountError`.
 - `execute_with_session(session_key, payload) -> Result<Bytes, MuxAccountError>`
   validates that `session_key` is authorized, registered, non-revoked, and
   non-expired, then emits an execution audit event and returns empty bytes.
-  It does not decode or dispatch `payload` — the `scopes` on the session
-  record are stored but not enforced here. See
-  [aa_sequence_diagram.md](aa_sequence_diagram.md) for the gap between this
-  and the intended account-abstraction execution flow.
+  **Fail-closed scope enforcement (T-40):** a key registered with an empty
+  `scopes` list is rejected with `Unauthorized` — a key with zero granted
+  capabilities cannot execute anything. It does not decode or dispatch
+  `payload`, so a **non-empty** scope list is not matched against the
+  payload's target method. See [aa_sequence_diagram.md](aa_sequence_diagram.md)
+  for the gap between this and the intended account-abstraction execution flow.
 - `set_metadata(meta) -> Result<(), MuxAccountError>` stores owner-controlled
   `RegistryMeta`.
 - `get_metadata() -> Option<RegistryMeta>` returns metadata when present.

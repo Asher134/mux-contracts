@@ -268,7 +268,7 @@ mod tests {
     use soroban_sdk::{
         symbol_short,
         testutils::{Address as _, Events},
-        Env, String,
+        Env, FromVal, String,
     };
 
     fn setup() -> (Env, MuxRegistryClient<'static>, Address) {
@@ -418,7 +418,6 @@ mod tests {
         let version = String::from_str(&env, "1.0.0");
         let desc = String::from_str(&env, "desc");
         let author = String::from_str(&env, "mux-labs");
-        let repo = String::from_str(&env, "https://github.com/mux-labs/mux-contracts");
 
         // Fill the registry to exactly MAX_CONTRACTS (128) entries.
         // Two-letter base-26 symbols: "aa"=0 … "ex"=127, "ey"=128.
@@ -487,45 +486,24 @@ mod tests {
     #[test]
     fn test_register_requires_admin_auth() {
         use soroban_sdk::testutils::Events;
-        // No mock_all_auths — require_auth must reject.
+        // Deliberately omit mock_all_auths — admin.require_auth() must reject.
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxRegistry);
         let client = MuxRegistryClient::new(&env, &contract_id);
-        // Initialize with auth mocked just for this one call.
-        {
-            let env_init = Env::default();
-            env_init.mock_all_auths();
-            let cid = env_init.register_contract(None, MuxRegistry);
-            let c = MuxRegistryClient::new(&env_init, &cid);
-            let admin = Address::generate(&env_init);
-            c.initialize(&admin);
-        }
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage()
+                .instance()
+                .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        });
 
-        // Use a separate, properly initialised contract in its own env so
-        // require_auth fires on the register call (not on initialize).
-        let env2 = Env::default();
-        // Initialize with mocked auth.
-        let cid2 = env2.register_contract(None, MuxRegistry);
-        let c2 = MuxRegistryClient::new(&env2, &cid2);
-        let admin2 = Address::generate(&env2);
-        env2.mock_all_auths();
-        c2.initialize(&admin2);
-        env2.mock_all_auths_allowing_non_root_auth(); // clear mock; non-root denies register
-
-        // Use a clean env (no mocks) for the unauthorized register attempt.
-        let env3 = Env::default();
-        let cid3 = env3.register_contract(None, MuxRegistry);
-        let c3 = MuxRegistryClient::new(&env3, &cid3);
-        let admin3 = Address::generate(&env3);
-        // Initialise so Admin key is present (require_admin can find it).
-        {
-            let _guard = env3.mock_all_auths();
-            c3.initialize(&admin3);
-        }
-        // Now attempt register without mock — require_auth on admin3 must reject.
+        // Attempt register without any auth — require_auth on admin must reject.
         let name = symbol_short!("account");
-        let version = String::from_str(&env3, "1.0.0");
-        let result = c3.try_register(&name, &version);
+        let version = String::from_str(&env, "1.0.0");
+        let result = client.try_register(&name, &version);
         assert!(
             result.is_err(),
             "register must be rejected when admin auth is absent"
@@ -533,18 +511,18 @@ mod tests {
 
         // No version entry must have been written.
         assert!(
-            c3.try_get_version(&name).is_err(),
+            client.try_get_version(&name).is_err(),
             "no version must be stored after a rejected register"
         );
         // Names list must still be empty.
         assert_eq!(
-            c3.list_contracts().len(),
+            client.list_contracts().len(),
             0,
             "names list must remain empty after a rejected register"
         );
         // No events must have been emitted.
         assert_eq!(
-            env3.events().all().len(),
+            env.events().all().len(),
             0,
             "no events must be emitted after a rejected register"
         );
@@ -555,15 +533,19 @@ mod tests {
     #[test]
     fn test_register_with_metadata_requires_admin_auth() {
         use soroban_sdk::testutils::Events;
+        // Deliberately omit mock_all_auths — admin.require_auth() must reject.
         let env = Env::default();
         let cid = env.register_contract(None, MuxRegistry);
         let client = MuxRegistryClient::new(&env, &cid);
         let admin = Address::generate(&env);
-        // Initialise so Admin key is present.
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        // Seed the Admin key directly so require_admin can find it, with no
+        // auth mocked anywhere (mock_all_auths is not restorable via a guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage()
+                .instance()
+                .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        });
         // Attempt register_with_metadata without any auth mock.
         let name = symbol_short!("batcher");
         let version = String::from_str(&env, "1.0.0");
@@ -614,17 +596,21 @@ mod tests {
     #[test]
     fn test_register_rejects_non_admin_caller() {
         use soroban_sdk::testutils::Events;
+        // Deliberately omit mock_all_auths — the wrong signer must be rejected.
         let env = Env::default();
         let cid = env.register_contract(None, MuxRegistry);
         let client = MuxRegistryClient::new(&env, &cid);
         let admin = Address::generate(&env);
         let _attacker = Address::generate(&env);
 
-        // Initialise legitimately.
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch, not a restorable guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage()
+                .instance()
+                .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        });
 
         // Attempt to register from env with no mocked signer.
         let name = symbol_short!("perm");
@@ -644,15 +630,20 @@ mod tests {
     #[test]
     fn test_register_with_metadata_rejects_non_admin_caller() {
         use soroban_sdk::testutils::Events;
+        // Deliberately omit mock_all_auths — the wrong signer must be rejected.
         let env = Env::default();
         let cid = env.register_contract(None, MuxRegistry);
         let client = MuxRegistryClient::new(&env, &cid);
         let admin = Address::generate(&env);
 
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch, not a restorable guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage()
+                .instance()
+                .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
+        });
 
         let name = symbol_short!("policy");
         let version = String::from_str(&env, "2.0.0");
@@ -700,10 +691,18 @@ mod tests {
         let cid_unauth = env_unauth.register_contract(None, MuxRegistry);
         let c_unauth = MuxRegistryClient::new(&env_unauth, &cid_unauth);
         let admin_unauth = Address::generate(&env_unauth);
-        {
-            let _guard = env_unauth.mock_all_auths();
-            c_unauth.initialize(&admin_unauth);
-        }
+        // Seed Admin directly — mock_all_auths is a permanent switch, so it
+        // cannot be used to initialize and then un-mock for the rejection.
+        env_unauth.as_contract(&cid_unauth, || {
+            env_unauth
+                .storage()
+                .instance()
+                .set(&DataKey::Admin, &admin_unauth);
+            env_unauth
+                .storage()
+                .instance()
+                .set(&DataKey::Names, &Vec::<Symbol>::new(&env_unauth));
+        });
         let name_unauth = symbol_short!("batcher");
         let ver2 = String::from_str(&env_unauth, "1.0.0");
         let result = c_unauth.try_register(&name_unauth, &ver2);

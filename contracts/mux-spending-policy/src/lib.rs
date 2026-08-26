@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_double_initialize_fails() {
-        let (env, client, admin) = setup();
+        let (_, client, admin) = setup();
         assert_eq!(
             client.try_initialize(&admin),
             Err(Ok(SpendingPolicyError::AlreadyInitialized))
@@ -320,21 +320,23 @@ mod tests {
 
     #[test]
     fn test_set_policy_requires_admin_auth() {
+        // Deliberately omit mock_all_auths — admin.require_auth() must reject.
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxSpendingPolicy);
         let client = MuxSpendingPolicyClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+        });
 
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
         let result = client.try_set_policy(&account, &asset, &1000, &17280);
         assert!(result.is_err());
         assert!(client.try_get_policy(&account, &asset).is_err());
-        assert_eq!(env.events().all().len(), 1);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     // ── set_policy ────────────────────────────────────────────────────────────
@@ -706,7 +708,7 @@ mod tests {
         let events = env.events().all();
         assert_eq!(events.len(), 1);
 
-        let (_, topics, data) = events.get(0).unwrap();
+        let (_, topics, _) = events.get(0).unwrap();
         assert_eq!(topics.len(), 2);
 
         // Verify topics
@@ -828,7 +830,7 @@ mod tests {
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
         // Must not panic even though budget is default.
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17_280);
     }
 
     /// TTL constants are sized for the expected ~30-day window.
@@ -837,8 +839,9 @@ mod tests {
         // TTL_THRESHOLD ≈ 1 day at 5 s/ledger; TTL_EXTEND_TO ≈ 30 days.
         assert_eq!(TTL_THRESHOLD, 17_280);
         assert_eq!(TTL_EXTEND_TO, 518_400);
-        // Extend-to must always be greater than threshold.
-        assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
+        // Extend-to must always be greater than threshold (checked at compile
+        // time to satisfy clippy's assertions_on_constants).
+        const _: () = assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
     }
 
     // ── NotInitialized tests (#505) ──────────────────────────────────────────

@@ -38,7 +38,7 @@ Legend:
       only written to storage — and the guard only released — after
       `invoke_contract` returns (checks-effects-interactions; see §5.2).
 - [ ] `register_session_key` / `revoke_session_key` — `require_owner` helper called.
-- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`).
+- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Fail-closed scope enforcement (T-40):** a key registered with an empty `scopes` list is rejected with `Unauthorized` (unit test: `test_execute_with_session_rejects_empty_scopes`). Remaining limitation: `payload` is not decoded or dispatched, so a **non-empty** scope list is not matched against the payload's target method — see `docs/aa_sequence_diagram.md`.
 - [ ] `set_metadata` — `require_owner` helper called.
 - [ ] No public function mutates storage without an auth check.
 

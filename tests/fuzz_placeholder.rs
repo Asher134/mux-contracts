@@ -90,8 +90,8 @@ mod fuzz_instruction_data {
 /// mux-account: spend_limit / debit / collection-cap invariants.
 #[cfg(test)]
 mod fuzz_account {
-    use mux_account::{MuxAccount, MuxAccountClient, MuxAccountError};
-    use soroban_sdk::{testutils::Address as _, Address, Bytes, Env, Vec};
+    use mux_account::{MuxAccount, MuxAccountClient, MuxAccountError, Scope};
+    use soroban_sdk::{symbol_short, testutils::Address as _, vec, Address, Bytes, Env, Vec};
 
     const MAX_DELEGATES: u32 = 64;
     const MAX_SESSION_KEYS: u32 = 32;
@@ -104,6 +104,18 @@ mod fuzz_account {
         let owner = Address::generate(&env);
         client.initialize(&owner, &Vec::new(&env));
         (env, client, owner)
+    }
+
+    /// T-40 (docs/threat-model.md): session keys must be registered with at
+    /// least one granted scope; an empty-scope key is rejected fail-closed at
+    /// execution time, so success-path floods register a real capability.
+    fn pay_scope(env: &Env) -> Vec<Scope> {
+        vec![
+            &env,
+            Scope {
+                method: symbol_short!("pay"),
+            },
+        ]
     }
 
     /// Invariant: set_spend_limit rejects non-positive amounts and zero periods
@@ -216,13 +228,13 @@ mod fuzz_account {
         let mut keys = Vec::new(&env);
         for i in 0..MAX_SESSION_KEYS {
             let sk = Address::generate(&env);
-            client.register_session_key(&sk, &(1_000_000_u64 + i as u64), &Vec::new(&env));
+            client.register_session_key(&sk, &(1_000_000_u64 + i as u64), &pay_scope(&env));
             keys.push_back(sk);
         }
 
         // One more, past the cap, must fail closed.
         let overflow = Address::generate(&env);
-        let result = client.try_register_session_key(&overflow, &2_000_000_u64, &Vec::new(&env));
+        let result = client.try_register_session_key(&overflow, &2_000_000_u64, &pay_scope(&env));
         assert_eq!(
             result,
             Err(Ok(MuxAccountError::TooManySessionKeys)),
@@ -258,12 +270,12 @@ mod fuzz_account {
         let mut keys = Vec::new(&env);
         for i in 0..MAX_SESSION_KEYS {
             let sk = Address::generate(&env);
-            client.register_session_key(&sk, &(1_000_000_u64 + i as u64), &Vec::new(&env));
+            client.register_session_key(&sk, &(1_000_000_u64 + i as u64), &pay_scope(&env));
             keys.push_back(sk);
         }
 
         let existing = keys.get(0).unwrap();
-        let result = client.try_register_session_key(&existing, &3_000_000_u64, &Vec::new(&env));
+        let result = client.try_register_session_key(&existing, &3_000_000_u64, &pay_scope(&env));
         assert!(
             result.is_ok(),
             "updating an existing session key at the cap must succeed: {result:?}"
