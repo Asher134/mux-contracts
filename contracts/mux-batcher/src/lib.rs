@@ -1397,6 +1397,46 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_batch_requires_caller_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        ops.push_back(Operation {
+            target: Address::generate(&env),
+            fn_name: symbol_short!("noop"),
+            args: Vec::new(&env),
+            require_success: false,
+            kind: BatchOperationKind::Invoke,
+        });
+
+        let result = client.try_execute_batch(&caller, &ops);
+        assert!(result.is_err());
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_simulate_batch_requires_caller_auth() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, MuxBatcher);
+        let client = MuxBatcherClient::new(&env, &contract_id);
+        let caller = Address::generate(&env);
+        let mut ops: Vec<Operation> = Vec::new(&env);
+        ops.push_back(Operation {
+            target: Address::generate(&env),
+            fn_name: symbol_short!("noop"),
+            args: Vec::new(&env),
+            require_success: false,
+            kind: BatchOperationKind::Invoke,
+        });
+
+        let result = client.try_simulate_batch(&caller, &ops);
+        assert!(result.is_err());
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
     fn test_upgrade_before_initialize_returns_not_initialized() {
         let env = Env::default();
         env.mock_all_auths();
