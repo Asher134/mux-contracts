@@ -23,6 +23,10 @@ Legend:
 
 ### 1.1 `mux-account`
 
+> **Immutable by design** — no `upgrade()` entry point exists or will be added.
+> See [account-upgrade-migration.md](account-upgrade-migration.md) and
+> [upgrade-auth-requirements.md](upgrade-auth-requirements.md).
+
 - [ ] `initialize` — `owner.require_auth()` called before any storage write.
 - [ ] `set_delegate` — `require_owner` helper called; verifies `owner.require_auth()`.
 - [ ] `remove_delegate` — `require_owner` helper called.

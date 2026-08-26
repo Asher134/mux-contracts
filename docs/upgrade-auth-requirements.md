@@ -28,7 +28,7 @@ This document defines the authentication requirements for upgrading Mux Protocol
 
 | Contract | Has `upgrade()` | Auth pattern | Notes |
 |----------|----------------|--------------|-------|
-| `mux-account` | Not yet | N/A (immutable) | Deployment is currently immutable; upgrade path documented but entry point not exposed |
+| `mux-account` | **No (immutable by design)** | N/A | Account is intentionally immutable — immutability is a user trust guarantee for core AA logic. No upgrade() entry point will be added. Migration means deploying a new instance; see [account-upgrade-migration.md](account-upgrade-migration.md) and [mainnet-immutable-flag-guidance.md](mainnet-immutable-flag-guidance.md). |
 | `mux-account-factory` | Not yet | N/A (immutable) | No on-chain upgrade entry point |
 | `mux-batcher` | **Yes** | `require_admin()` → `require_auth()` | Admin is optional — set via `initialize(admin)`; a batcher never initialized has no `upgrade()` path (`NotInitialized`). Batching itself never required an admin. See [batcher-upgrade.md](batcher-upgrade.md) |
 | `mux-delegation` | **Yes** | `require_admin()` → `require_auth()` | Admin is optional — set via `initialize(admin)`; independent of the caller-supplied `admin` param on `link_contract_id`. See [delegation-upgrade.md](delegation-upgrade.md) |
