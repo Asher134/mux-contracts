@@ -197,7 +197,11 @@ impl MuxSpendingPolicy {
             );
             return Err(SpendingPolicyError::PolicyNotFound);
         }
-        let policy: SpendLimit = env.storage().instance().get(&key).unwrap();
+        let policy: SpendLimit = env
+            .storage()
+            .instance()
+            .get(&key)
+            .ok_or(SpendingPolicyError::PolicyNotFound)?;
         if amount > policy.limit {
             emit(
                 &env,

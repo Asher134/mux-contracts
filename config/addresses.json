@@ -4,20 +4,29 @@
     "muxBatcher": "",
     "muxDelegation": "",
     "muxPermissions": "",
-    "muxWalletRegistry": ""
+    "muxWalletRegistry": "",
+    "muxAccountFactory": "",
+    "muxRegistry": "",
+    "muxPolicy": ""
   },
   "testnet": {
     "muxAccount": "",
     "muxBatcher": "",
     "muxDelegation": "",
     "muxPermissions": "",
-    "muxWalletRegistry": ""
+    "muxWalletRegistry": "",
+    "muxAccountFactory": "",
+    "muxRegistry": "",
+    "muxPolicy": ""
   },
   "mainnet": {
     "muxAccount": "",
     "muxBatcher": "",
     "muxDelegation": "",
     "muxPermissions": "",
-    "muxWalletRegistry": ""
+    "muxWalletRegistry": "",
+    "muxAccountFactory": "",
+    "muxRegistry": "",
+    "muxPolicy": ""
   }
 }
