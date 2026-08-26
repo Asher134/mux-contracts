@@ -812,12 +812,12 @@ mod tests {
     fn test_delegate_cap_reclaims_expired_entries() {
         let (env, client, owner, _cid) = setup();
         client.initialize(&owner, &Vec::new(&env));
-        let expiry = env.ledger().sequence() + 1;
+        let expiry = env.ledger().timestamp() + 1;
         for _ in 0..64 {
             client.set_delegate(&Address::generate(&env), &expiry, &false);
         }
 
-        env.ledger().set_sequence_number(expiry);
+        env.ledger().set_timestamp(expiry);
         let replacement = Address::generate(&env);
         assert!(client
             .try_set_delegate(&replacement, &(expiry + 100), &true)

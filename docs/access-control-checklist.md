@@ -191,6 +191,7 @@ See [docs/storage-griefing.md](storage-griefing.md) for full details.
 
 - [ ] `mux-account`: `set_delegate` enforces `MAX_DELEGATES = 64`; new entries beyond cap return `TooManyDelegates` (unit test: `test_delegate_cap_enforced`).
 - [ ] `mux-account`: updating an existing delegate at cap succeeds (unit test: `test_delegate_cap_allows_update`).
+- [ ] `mux-account`: expired delegates are reclaimed using ledger timestamps before enforcing the cap (unit test: `test_delegate_cap_reclaims_expired_entries`).
 - [ ] `mux-account-factory`: `deploy_account` and `deploy_account_with_metadata` enforce `MAX_ACCOUNTS_PER_OWNER = 64` per owner; new deploys beyond cap return `TooManyAccounts` (unit tests: `test_accounts_cap_enforced`, `test_deploy_account_with_metadata_enforces_cap`).
 - [ ] `mux-account-factory`: `simulate_deploy` and `simulate_deploy_with_metadata` enforce the same 64-account cap without writing state (unit tests: `test_simulate_deploy_enforces_cap`, `test_simulate_deploy_with_metadata_enforces_cap`).
 - [ ] `mux-account-factory`: per-owner cap is independent — one owner filling their cap does not block other owners (unit test: `test_cap_is_per_owner_not_global`).
