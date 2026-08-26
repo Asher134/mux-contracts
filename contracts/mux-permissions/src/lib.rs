@@ -1166,6 +1166,35 @@ mod integration_tests {
         );
     }
 
+    /// Two admin candidates can be pending simultaneously. Promoting one to
+    /// threshold must not affect the other candidate's pending status or
+    /// approval count.
+    #[test]
+    fn test_multiple_pending_admin_candidates_are_independent() {
+        let (env, client, admin, contract_id) = setup_integration();
+        client.set_admin_threshold(&2_u32);
+
+        let candidate_a = Address::generate(&env);
+        let candidate_b = Address::generate(&env);
+        let second_approver = Address::generate(&env);
+
+        client.propose_admin(&candidate_a);
+        client.propose_admin(&candidate_b);
+        assert!(client.get_pending_admins().contains(&candidate_a));
+        assert!(client.get_pending_admins().contains(&candidate_b));
+
+        // Promote candidate_a to threshold.
+        client.approve_admin(&admin, &candidate_a);
+        client.approve_admin(&second_approver, &candidate_a);
+        assert_eq!(stored_admin(&env, &contract_id), candidate_a);
+
+        // candidate_a must be gone from pending; candidate_b must remain,
+        // untouched by candidate_a's promotion.
+        let pending = client.get_pending_admins();
+        assert!(!pending.contains(&candidate_a));
+        assert!(pending.contains(&candidate_b));
+    }
+
     // ── symbol_short length audit (#496) ─────────────────────────────────────
 
     #[test]
