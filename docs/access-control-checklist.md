@@ -90,11 +90,13 @@ Legend:
 
 - [ ] `initialize` — `owner.require_auth()` called before storage write.
 - [ ] `initiate_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
+- [ ] `approve_recovery` — `guardian.require_auth()` + `require_guardian` helper called; rejects duplicate approvals.
 - [ ] `cancel_recovery` — `require_owner` helper called; only current owner can cancel.
 - [ ] `execute_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
 - [ ] `approve_recovery_admin` — `require_owner` helper called; lets the owner bypass the timelock for a pending recovery.
 - [ ] `add_guardian` / `remove_guardian` — `require_owner` helper called; `remove_guardian` additionally rejects removing the last guardian.
-- [ ] `set_registry` — `owner.require_auth()` called.
+- [ ] `set_quorum_threshold` — `require_owner` helper called; threshold must be >= 1 and <= guardian count.
+- [ ] `set_registry` — the caller-supplied `owner` must equal the stored owner (`Unauthorized` otherwise); `owner.require_auth()` called before storage write.
 - [ ] `upgrade` — `require_owner` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; should not be called while a `Pending` recovery is in flight.
 - [ ] No recovery mutation is possible without guardian or owner authorization.
 

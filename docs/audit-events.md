@@ -215,20 +215,12 @@ Contract tag: `mux_bat`
 
 | Action | Trigger | Data payload |
 |---|---|---|
+| `init` | `initialize` succeeds | `admin: Address` |
 | `bat_start` | `execute_batch` begins, before any operation runs | `(caller: Address, op_count: u32)` |
 | `executed` | `execute_batch` completes (success or partial failure) | `(caller: Address, success_count: u32, failure_count: u32)` |
 | `bat_ok` | `execute_batch` completes with zero failures | `(caller: Address, success_count: u32)` |
 | `bat_abort` | A `require_success=true` operation fails | `caller: Address` |
 | `sim_done` | `simulate_batch` completes successfully | `(caller: Address, success_count: u32)` |
-
-> `simulate_batch` emits `sim_done` but writes no state and calls no target
-> contracts — it is a dry-run, not an execution.
-| `init` | `initialize` succeeds | `admin: Address` |
-| `bat_start` | `execute_batch` starts, after size checks pass | `(caller: Address, op_count: u32)` |
-| `executed` | `execute_batch` completes (success or partial failure) | `(caller: Address, success_count: u32, failure_count: u32)` |
-| `bat_ok` | `execute_batch` completes with zero failures | `(caller: Address, success_count: u32)` |
-| `bat_abort` | `execute_batch` aborts on a required-operation failure | `caller: Address` |
-| `sim_done` | `simulate_batch` completes | `(caller: Address, success_count: u32)` |
 
 > `simulate_batch` writes no state but does emit `sim_done` for off-chain
 > observability. `upgrade` emits no event — see the note under
@@ -298,7 +290,7 @@ Contract tag: `mux_recv`
 | `rec_init` | `initiate_recovery` succeeds | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
 | `rec_appr` | `approve_recovery` succeeds | `(guardian: Address, approval_count: u32)` |
 | `rec_exec` | `execute_recovery` succeeds | `(guardian: Address, new_owner: Address)` |
-| `rec_adm` | `approve_recovery_admin` succeeds | `(new_owner: Address, co_guardian: Address)` |
+| `rec_adm` | `approve_recovery_admin` succeeds | `new_owner: Address` |
 | `rec_cncl` | `cancel_recovery` succeeds | `()` |
 | `grd_add` | `add_guardian` succeeds | `guardian: Address` |
 | `grd_rm` | `remove_guardian` succeeds | `guardian: Address` |

@@ -62,13 +62,16 @@
  *
  * | Action     | Trigger             | Data payload                                                   |
  * |------------|---------------------|----------------------------------------------------------------|
- * | `init`     | `initialize`        | `owner: Address`                                               |
- * | `rec_init` | `initiate_recovery` | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
- * | `rec_exec` | `execute_recovery`  | `(guardian: Address, new_owner: Address)`                      |
- * | `rec_cncl` | `cancel_recovery`   | `()`                                                           |
- * | `grd_add`  | `add_guardian`      | `(owner: Address, guardian: Address)`                          |
- * | `grd_rm`   | `remove_guardian`   | `(owner: Address, guardian: Address)`                          |
- * | `reg_link` | `set_registry`      | `registry_id: Address`                                         |
+ * | `init`     | `initialize`           | `owner: Address`                                               |
+ * | `rec_init` | `initiate_recovery`    | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
+ * | `rec_appr` | `approve_recovery`     | `(guardian: Address, approval_count: u32)`                     |
+ * | `rec_exec` | `execute_recovery`     | `(guardian: Address, new_owner: Address)`                      |
+ * | `rec_adm`  | `approve_recovery_admin` | `new_owner: Address`                                          |
+ * | `rec_cncl` | `cancel_recovery`      | `()`                                                           |
+ * | `grd_add`  | `add_guardian`         | `guardian: Address`                                            |
+ * | `grd_rm`   | `remove_guardian`      | `guardian: Address`                                            |
+ * | `qrm_set`  | `set_quorum_threshold` | `threshold: u32`                                               |
+ * | `reg_link` | `set_registry`         | `registry_id: Address`                                         |
  *
  * See [`docs/recovery-trust-model.md`] and [`docs/audit-events.md`] for
  * full security model and event schema reference.
@@ -480,7 +483,7 @@ impl MuxRecovery {
         env.storage().instance().set(&DataKey::Owner, &new_owner);
         env.storage().instance().set(&DataKey::Recovery, &request);
         // Emit a distinct audit event for owner-approved recoveries.
-        emit(&env, symbol_short!("rec_adm"), (new_owner.clone()));
+        emit(&env, symbol_short!("rec_adm"), new_owner.clone());
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -568,16 +571,27 @@ impl MuxRecovery {
 
     /// Link a registry contract address to this recovery contract.
     ///
-    /// Only the current owner may call this method. Emits a `reg_link` audit
-    /// event and extends instance TTL.
+    /// Only the current owner may call this method. The caller-supplied
+    /// `owner` argument must equal the stored owner — a mismatch is rejected
+    /// with [`RecoveryError::Unauthorized`] — and `owner.require_auth()` is
+    /// called before the storage write. Emits a `reg_link` audit event and
+    /// extends instance TTL.
     pub fn set_registry(
         env: Env,
         owner: Address,
         registry_id: Address,
     ) -> Result<(), RecoveryError> {
-        // Ensure the contract is initialised before accepting a registry link.
-        if !env.storage().instance().has(&DataKey::Owner) {
-            return Err(RecoveryError::NotInitialized);
+        // Fail-closed: the caller-supplied `owner` must be the stored owner.
+        // Otherwise any stranger could pass their own address, satisfy
+        // `owner.require_auth()` with their own signature, and re-link the
+        // registry to mislead off-chain tooling.
+        let stored_owner: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Owner)
+            .ok_or(RecoveryError::NotInitialized)?;
+        if stored_owner != owner {
+            return Err(RecoveryError::Unauthorized);
         }
         owner.require_auth();
         env.storage()
@@ -678,8 +692,8 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         symbol_short,
-        testutils::{Address as _, Events, Ledger},
-        vec, Env, FromVal,
+        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+        vec, Env, FromVal, IntoVal,
     };
 
     fn topic_action(
@@ -722,7 +736,11 @@ mod tests {
         let contract_id = env.register_contract(None, MuxRecovery);
         let client = MuxRecoveryClient::new(&env, &contract_id);
         let owner = Address::generate(&env);
-        client.initialize(&owner, &vec![&env], &1_u32);
+        // A non-empty guardian set is required: quorum_threshold (1) must be
+        // <= guardians.len() (an empty set would fail with
+        // InvalidQuorumThreshold before any storage write).
+        let guardian = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, guardian], &1_u32);
         let events = env.events().all();
         assert_eq!(events.len(), 1);
         assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
@@ -1241,6 +1259,59 @@ mod tests {
         let registry = Address::generate(&env);
         client.set_registry(&owner, &registry);
         assert_eq!(client.registry_id(), Some(registry));
+    }
+
+    #[test]
+    fn test_set_registry_non_owner_rejected() {
+        // Fail-closed: even with auth fully mocked, a caller-supplied `owner`
+        // that is not the stored owner must be rejected. Otherwise any
+        // stranger could re-link the registry with their own signature.
+        let (env, client, _owner, _) = setup();
+        let stranger = Address::generate(&env);
+        let registry = Address::generate(&env);
+        let err = client
+            .try_set_registry(&stranger, &registry)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+        assert_eq!(client.registry_id(), None);
+    }
+
+    #[test]
+    fn test_set_registry_stranger_with_valid_auth_rejected() {
+        // A stranger holding a perfectly valid signature over `set_registry`
+        // must not be able to substitute for the owner: the stored-owner
+        // check fires before `require_auth` is consulted.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let guardian = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, guardian], &1_u32);
+
+        let stranger = Address::generate(&env);
+        let registry = Address::generate(&env);
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_registry",
+                args: vec![
+                    &env,
+                    stranger.clone().into_val(&env),
+                    registry.clone().into_val(&env),
+                ],
+                sub_invokes: &[],
+            },
+        }]);
+
+        let err = client
+            .try_set_registry(&stranger, &registry)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+        assert_eq!(client.registry_id(), None);
     }
 
     #[test]
