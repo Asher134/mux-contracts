@@ -182,7 +182,8 @@ This entrypoint is read-only (no event emitted) and is designed primarily for of
 | Attacker spams recovery requests | Only one Pending request allowed; each requires guardian auth |
 | Replay of old recovery request | Each request stores `initiated_at`; executed/cancelled requests cannot be re-executed |
 | Owner tries to remove guardians | Guardian set is immutable after `initialize` |
-| Malicious registry link | `set_registry` requires owner auth; performs live cross-contract validation against the registry before storing the link; `reg_link` event provides on-chain audit trail |
+| Compromised owner bypasses 24 h timelock via `approve_recovery_admin` | `approve_recovery_admin` now requires **both** owner auth and a registered guardian co-sign; a compromised owner key alone cannot execute the fast path |
+| Malicious registry link | `set_registry` requires owner auth; `reg_link` event provides on-chain audit trail |
 
 ---
 

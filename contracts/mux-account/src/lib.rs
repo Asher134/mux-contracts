@@ -612,6 +612,15 @@ impl MuxAccount {
         if record.revoked || env.ledger().timestamp() >= record.expires_at {
             return Err(MuxAccountError::Unauthorized);
         }
+        // FAIL-CLOSED (T-08 in docs/threat-model.md): a session key granted
+        // **no** scopes has zero capabilities and must not be able to execute
+        // anything. Accepting it would be a silent skip of scope enforcement
+        // — `scopes` is the capability list the owner granted at registration,
+        // and an empty list means "no capabilities". Reject instead of
+        // returning Ok.
+        if record.scopes.is_empty() {
+            return Err(MuxAccountError::Unauthorized);
+        }
 
         emit(
             &env,
@@ -732,7 +741,7 @@ mod tests {
                 soroban_sdk::vec![&env, asset.into_val(&env), spend.into_val(&env)];
             let result = env.try_invoke_contract::<soroban_sdk::Val, soroban_sdk::Error>(
                 &mux_account,
-                &symbol_short!("debit_spend"),
+                &soroban_sdk::Symbol::new(&env, "debit_spend"),
                 args,
             );
             result.is_err()
@@ -792,7 +801,7 @@ mod tests {
         };
 
         assert!(client
-            .try_set_delegate(&delegate, &1000_u32, &true)
+            .try_set_delegate(&delegate, &1000_u64, &true)
             .is_err());
         assert!(client
             .try_set_spend_limit(&asset, &100_i128, &10_u32)
@@ -861,7 +870,7 @@ mod tests {
         client.initialize(&owner, &Vec::new(&env));
         let asset = Address::generate(&env);
         client.set_spend_limit(&asset, &1000_i128, &100_u32);
-        client.try_debit_spend(&asset, &200_i128).unwrap();
+        client.try_debit_spend(&asset, &200_i128).unwrap().unwrap();
         let events = env.events().all();
         // init + lmt_set + debited
         assert_eq!(events.len(), 3);
@@ -1071,7 +1080,7 @@ mod tests {
             &40_i128,
         );
         assert_eq!(u32::from_val(&env, &value), 7);
-        assert_eq!(
+        assert!(matches!(
             client.try_execute(
                 &target,
                 &symbol_short!("ping"),
@@ -1080,7 +1089,7 @@ mod tests {
                 &70_i128,
             ),
             Err(Ok(MuxAccountError::SpendLimitExceeded))
-        );
+        ));
     }
 
     // ── CEI ordering / reentrancy guard (invoke-then-debit) ─────────────────
@@ -1141,7 +1150,10 @@ mod tests {
 
         let rejected =
             client.try_execute(&target, &symbol_short!("ping"), &args, &asset, &500_i128);
-        assert_eq!(rejected, Err(Ok(MuxAccountError::SpendLimitExceeded)));
+        assert!(matches!(
+            rejected,
+            Err(Ok(MuxAccountError::SpendLimitExceeded))
+        ));
 
         // The guard must have been released on that failure path — a
         // within-limit call right after must succeed, not hit
@@ -1170,7 +1182,7 @@ mod tests {
         client.initialize(&owner, &Vec::new(&env));
         let asset = Address::generate(&env);
         client.set_spend_limit(&asset, &100_i128, &100_u32);
-        assert_eq!(
+        assert!(matches!(
             client.try_execute(
                 &Address::generate(&env),
                 &symbol_short!("ping"),
@@ -1179,7 +1191,7 @@ mod tests {
                 &0_i128,
             ),
             Err(Ok(MuxAccountError::InvalidAmount))
-        );
+        ));
     }
 
     #[test]
@@ -1265,14 +1277,26 @@ mod tests {
             &asset,
             &10_i128,
         );
-        assert_eq!(result, Err(Ok(MuxAccountError::Unauthorized)));
+        assert!(matches!(result, Err(Ok(MuxAccountError::Unauthorized))));
     }
 
     #[test]
     fn test_pause_requires_owner_auth() {
-        let (env, client, _owner) = setup_without_auth();
+        let (_env, client, _owner) = setup_without_auth();
         let result = client.try_pause();
         assert!(result.is_err());
+    }
+
+    /// A single-scope list used by session-key happy-path tests. Empty-scope
+    /// keys are rejected fail-closed (T-40 in docs/threat-model.md), so tests
+    /// that expect success must register at least one granted capability.
+    fn pay_scope(env: &Env) -> soroban_sdk::Vec<Scope> {
+        soroban_sdk::vec![
+            &env,
+            Scope {
+                method: symbol_short!("pay"),
+            },
+        ]
     }
 
     #[test]
@@ -1283,7 +1307,7 @@ mod tests {
         client.register_session_key(
             &session_key,
             &(env.ledger().timestamp() + 60),
-            &Vec::new(&env),
+            &pay_scope(&env),
         );
         let payload = Bytes::new(&env);
         let _ = client.execute_with_session(&session_key, &payload);
@@ -1310,7 +1334,7 @@ mod tests {
         client.register_session_key(
             &session_key,
             &(env.ledger().timestamp() + 60),
-            &Vec::new(&env),
+            &pay_scope(&env),
         );
         client.revoke_session_key(&session_key);
         assert_eq!(
@@ -1318,11 +1342,35 @@ mod tests {
             Err(Ok(MuxAccountError::Unauthorized))
         );
 
-        client.register_session_key(&session_key, &env.ledger().timestamp(), &Vec::new(&env));
+        client.register_session_key(&session_key, &env.ledger().timestamp(), &pay_scope(&env));
         assert_eq!(
             client.try_execute_with_session(&session_key, &payload),
             Err(Ok(MuxAccountError::Unauthorized))
         );
+    }
+
+    /// T-40 fail-closed: a session key registered with an empty scope list
+    /// grants zero capabilities and must be rejected at execution time, not
+    /// silently accepted (the pre-fix behavior returned `Ok` unconditionally).
+    #[test]
+    fn test_execute_with_session_rejects_empty_scopes() {
+        let (env, client, owner, _cid) = setup();
+        client.initialize(&owner, &Vec::new(&env));
+        let session_key = Address::generate(&env);
+        client.register_session_key(
+            &session_key,
+            &(env.ledger().timestamp() + 60),
+            &Vec::new(&env),
+        );
+        let payload = Bytes::new(&env);
+        assert_eq!(
+            client.try_execute_with_session(&session_key, &payload),
+            Err(Ok(MuxAccountError::Unauthorized)),
+            "empty-scope session key must fail closed"
+        );
+        // No ses_exe event may be emitted on the rejected path.
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "only the init event may exist: {events:?}");
     }
 
     #[test]
@@ -1478,7 +1526,7 @@ mod tests {
         client.set_spend_limit(&asset, &1000_i128, &100_u32);
         let ttl_before = instance_ttl(&env, &cid);
 
-        client.try_debit_spend(&asset, &200_i128).unwrap();
+        client.try_debit_spend(&asset, &200_i128).unwrap().unwrap();
 
         let ttl_after = instance_ttl(&env, &cid);
         assert!(
@@ -1512,7 +1560,7 @@ mod tests {
         client.register_session_key(
             &session_key,
             &(env.ledger().timestamp() + 60),
-            &Vec::new(&env),
+            &pay_scope(&env),
         );
         let payload = Bytes::new(&env);
         let _ = client.execute_with_session(&session_key, &payload);
@@ -1567,4 +1615,3 @@ mod tests {
         // symbol_short! validates length at compile time; reaching here is sufficient.
     }
 }
-pub mod smart_wallet;

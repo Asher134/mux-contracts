@@ -10,6 +10,8 @@
 
 ## Overview
 
+For the repository-wide reserved short-tag registry and collision policy, see [Event Topic Conventions — Repository-wide short-tag registry](event-topic-conventions.md#repository-wide-short-tag-registry). The tags `ses_exe`, `bat_ok`, and `rec_init` are reserved for the events documented below and must not be reused for another action in a different contract.
+
 Every state-mutating operation in Mux contracts emits a Soroban event via `env.events().publish(topics, data)`.  
 Events are indexed on-chain and can be streamed from any Soroban RPC node using the `getEvents` method.
 
@@ -31,6 +33,8 @@ See [event-topic-conventions.md](event-topic-conventions.md) for naming rules, t
 ## mux-account events
 
 Contract tag: `mux_acct`
+
+> **Note:** `execute_with_session` scope enforcement (T-40) is now active. When a session key registered with an empty `scopes` list is used, the call is rejected with `Unauthorized` before any state mutation occurs. This rejection does **not** emit a `ses_exe` event (no events on error), but it is counted as an authorization failure and visible in host-level error logs. See [threat-model.md](threat-model.md) T-40 and [entrypoint-matrix.md](entrypoint-matrix.md) for the full fail-closed scope enforcement description.
 
 | Action | Trigger | Data payload |
 |---|---|---|
@@ -54,6 +58,11 @@ Contract tag: `mux_acct`
 >
 > `register_session_key` and `revoke_session_key` do not currently emit
 > dedicated audit events.
+>
+> `execute_with_session` emits `ses_exe` only on the success path. A rejected
+> call — unknown/revoked/expired key, or an **empty-scope key rejected
+> fail-closed (T-40)** — emits nothing, matching the no-events-on-error
+> convention.
 
 ---
 
@@ -290,7 +299,7 @@ Contract tag: `mux_recv`
 | `rec_init` | `initiate_recovery` succeeds | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
 | `rec_appr` | `approve_recovery` succeeds | `(guardian: Address, approval_count: u32)` |
 | `rec_exec` | `execute_recovery` succeeds | `(guardian: Address, new_owner: Address)` |
-| `rec_adm` | `approve_recovery_admin` succeeds | `new_owner: Address` |
+| `rec_adm` | `approve_recovery_admin` succeeds | `(new_owner: Address, co_guardian: Address)` |
 | `rec_cncl` | `cancel_recovery` succeeds | `()` |
 | `grd_add` | `add_guardian` succeeds | `guardian: Address` |
 | `grd_rm` | `remove_guardian` succeeds | `guardian: Address` |

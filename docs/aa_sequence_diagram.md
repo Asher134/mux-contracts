@@ -47,7 +47,8 @@ sequenceDiagram
     Relayer->>Account: execute_with_session(session_key, payload)
     Note over Account: session_key.require_auth()
     Note over Account: looks up SessionKeyRecord; rejects if missing, revoked, or expired
-    Note over Account: payload is never decoded or dispatched — `scopes` are stored but not checked
+    Note over Account: FAIL-CLOSED (T-40): rejects if scopes is empty — a key with zero granted capabilities cannot execute anything
+    Note over Account: payload is never decoded or dispatched — per-method scope checking is still future work
     Account-->>Relayer: Ok(empty Bytes)
     Note over Account: emits `ses_exe` event (session_key, payload_len only), extends instance TTL
 ```
@@ -59,11 +60,11 @@ sequenceDiagram
 | Signature/nonce validation | `EntryPoint.validateUserOp` against a `UserOperation` | `session_key.require_auth()` plus a `SessionKeyRecord` lookup (revoked/expiry check only) — no `UserOperation` or nonce concept exists |
 | Gas sponsorship | Optional `Paymaster.validatePaymasterUserOp` / `postOp` | Not implemented; no paymaster concept exists in this codebase |
 | Payload execution | `EntryPoint.execute(dest, value, callData)` against a target contract | **Stub** — `payload` is read only for its length (for the audit event); no `env.invoke_contract` call is made, no target is invoked |
-| Scoped authorization | Implied per-call capability check | `SessionKeyRecord.scopes: Vec<Scope>` is stored at registration but never read or enforced during `execute_with_session` |
+| Scoped authorization | Implied per-call capability check | `SessionKeyRecord.scopes` is enforced **fail-closed** (T-40): a key registered with an empty scope list is rejected with `Unauthorized` rather than silently accepted. Per-method matching against a decoded payload is still not implemented — a key with a non-empty scope list is accepted without verifying the payload targets a permitted method |
 | Result | Transaction receipt reflecting real execution | `Ok(Bytes::new(&env))` — an empty success value returned unconditionally on the happy path, regardless of what `payload` contained |
 
-This is tracked as a known gap (see `docs/abi_reference.md`'s `mux-account`
-method table and `docs/mux-account-interface.md`). Closing it requires design
-work on how `payload` should be decoded and dispatched, and how `scopes`
-should gate which calls a session key may make — that work is out of scope
-for a documentation fix and should be tracked as its own contract change.
+The empty-scope hole is closed (T-40, `test_execute_with_session_rejects_empty_scopes`); the
+remaining gap is that a **non-empty** scope list is not matched against the
+payload's target method. Closing that requires design work on how `payload`
+should be decoded and dispatched, and how `scopes` should gate which calls a
+session key may make — that work is tracked as its own contract change.

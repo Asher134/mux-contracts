@@ -132,12 +132,13 @@ impl MuxSpendingPolicy {
     /// Set or replace the spend limit for an account/asset pair.
     ///
     /// Only the initialized admin can change policies. The configured limit
-    /// must be strictly positive.
+    /// must be strictly positive, and `period_ledgers` sets the rolling window
+    /// length in ledgers and must be > 0 (≈ 17 280 ledgers ≈ 1 day at 5-second
+    /// ledger close) — a zero period is rejected with `InvalidPeriod`.
+    ///
+    /// The spent counter is reset to 0 on every call.
     ///
     /// Extends the instance storage TTL on every successful write (T-21).
-    /// must be strictly positive. `period_ledgers` sets the rolling window
-    /// length in ledgers and must be > 0 (≈ 17 280 ledgers ≈ 1 day at 5-second
-    /// ledger close). The spent counter is reset to 0 on every call.
     pub fn set_policy(
         env: Env,
         account: Address,
@@ -145,9 +146,14 @@ impl MuxSpendingPolicy {
         limit: i128,
         period_ledgers: u32,
     ) -> Result<(), SpendingPolicyError> {
+        // Fail-closed: auth is checked before any input validation so
+        // unauthenticated callers cannot probe validation state.
         Self::require_admin(&env)?;
         if limit <= 0 {
             return Err(SpendingPolicyError::InvalidInput);
+        }
+        if period_ledgers == 0 {
+            return Err(SpendingPolicyError::InvalidPeriod);
         }
         let policy = SpendLimit {
             asset: asset.clone(),
@@ -311,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_double_initialize_fails() {
-        let (env, client, admin) = setup();
+        let (_, client, admin) = setup();
         assert_eq!(
             client.try_initialize(&admin),
             Err(Ok(SpendingPolicyError::AlreadyInitialized))
@@ -320,21 +326,53 @@ mod tests {
 
     #[test]
     fn test_set_policy_requires_admin_auth() {
+        // Deliberately omit mock_all_auths — admin.require_auth() must reject.
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, MuxSpendingPolicy);
         let client = MuxSpendingPolicyClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        client.initialize(&admin);
+
+        // Drop all authorization (this also disables mock_all_auths' recording
+        // mode, per soroban-sdk's `set_auths` docs), so `admin.require_auth()`
+        // has nothing valid to check against.
+        env.set_auths(&[]);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+        });
 
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
         let result = client.try_set_policy(&account, &asset, &1000, &17280);
         assert!(result.is_err());
         assert!(client.try_get_policy(&account, &asset).is_err());
-        assert_eq!(env.events().all().len(), 1);
+        assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_set_policy_auth_checked_before_period_validation() {
+        // Fail-closed: an unauthenticated caller must be rejected by the auth
+        // gate even when the inputs are invalid (period_ledgers = 0), not by
+        // the validation — so callers cannot probe validation state and no
+        // policy/event is produced.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxSpendingPolicy);
+        let client = MuxSpendingPolicyClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        env.set_auths(&[]);
+
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let result = client.try_set_policy(&account, &asset, &1000, &0);
+        assert!(result.is_err());
+        assert!(client.try_get_policy(&account, &asset).is_err());
+        assert_eq!(env.events().all().len(), 1); // init only, no lmt_set
     }
 
     // ── set_policy ────────────────────────────────────────────────────────────
@@ -434,6 +472,21 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().unwrap();
         assert_eq!(err, SpendingPolicyError::InvalidInput);
+    }
+
+    #[test]
+    fn test_set_policy_rejects_zero_period() {
+        let (env, client, _) = setup();
+        let account = Address::generate(&env);
+        let asset = Address::generate(&env);
+        let result = client.try_set_policy(&account, &asset, &1000, &0);
+        assert_eq!(result, Err(Ok(SpendingPolicyError::InvalidPeriod)));
+        // No policy must be stored and no lmt_set event emitted on the rejection.
+        assert_eq!(
+            client.try_get_policy(&account, &asset),
+            Err(Ok(SpendingPolicyError::PolicyNotFound))
+        );
+        assert_eq!(env.events().all().len(), 1); // init only
     }
 
     #[test]
@@ -706,7 +759,7 @@ mod tests {
         let events = env.events().all();
         assert_eq!(events.len(), 1);
 
-        let (_, topics, data) = events.get(0).unwrap();
+        let (_, topics, _) = events.get(0).unwrap();
         assert_eq!(topics.len(), 2);
 
         // Verify topics
@@ -802,7 +855,10 @@ mod tests {
 
         let events_after = env.events().all();
         assert_eq!(events_after.len(), 3);
-        assert_eq!(topic_action(&env, &events_after, 2), symbol_short!("chk_ok"));
+        assert_eq!(
+            topic_action(&env, &events_after, 2),
+            symbol_short!("chk_ok")
+        );
     }
 
     // ── TTL tests (T-21) ──────────────────────────────────────────────────────
@@ -828,7 +884,8 @@ mod tests {
         let account = Address::generate(&env);
         let asset = Address::generate(&env);
         // Must not panic even though budget is default.
-        client.set_policy(&account, &asset, &1000);
+        client.set_policy(&account, &asset, &1000, &17280);
+        client.set_policy(&account, &asset, &1000, &17_280);
     }
 
     /// TTL constants are sized for the expected ~30-day window.
@@ -837,8 +894,9 @@ mod tests {
         // TTL_THRESHOLD ≈ 1 day at 5 s/ledger; TTL_EXTEND_TO ≈ 30 days.
         assert_eq!(TTL_THRESHOLD, 17_280);
         assert_eq!(TTL_EXTEND_TO, 518_400);
-        // Extend-to must always be greater than threshold.
-        assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
+        // Extend-to must always be greater than threshold (checked at compile
+        // time to satisfy clippy's assertions_on_constants).
+        const _: () = assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
     }
 
     // ── NotInitialized tests (#505) ──────────────────────────────────────────

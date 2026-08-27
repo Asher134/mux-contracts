@@ -472,11 +472,28 @@ impl MuxRecovery {
     }
 
     /// Admin-approved recovery: allow the current owner to approve and
-    /// execute a pending recovery immediately. This is intended for cases
-    /// where the owner consents to transfer without waiting the timelock.
-    pub fn approve_recovery_admin(env: Env) -> Result<(), RecoveryError> {
-        // Ensure caller is the current owner.
+    /// execute a pending recovery immediately, with a guardian co-signing to
+    /// prevent the owner from unilaterally bypassing the 24-hour timelock.
+    ///
+    /// Both the owner **and** at least one registered guardian must authorize
+    /// this call. The guardian co-sign requirement ensures the timelock bypass
+    /// cannot be triggered by a compromised owner key alone — the attacker
+    /// would also need to control a guardian key.
+    ///
+    /// # Arguments
+    /// * `co_guardian` — a registered guardian address whose auth is required
+    ///   alongside the owner's auth.
+    ///
+    /// # Errors
+    /// * `Unauthorized` — caller is not the owner, or `co_guardian` is not a
+    ///   registered guardian.
+    /// * `NoActiveRecovery` — no pending recovery request exists.
+    pub fn approve_recovery_admin(env: Env, co_guardian: Address) -> Result<(), RecoveryError> {
+        // Both owner AND the specified co-guardian must authorize.
         Self::require_owner(&env)?;
+        co_guardian.require_auth();
+        Self::require_guardian(&env, &co_guardian)?;
+
         let mut request = Self::require_pending(&env)?;
         let new_owner = request.new_owner.clone();
         request.status = RecoveryStatus::Executed;

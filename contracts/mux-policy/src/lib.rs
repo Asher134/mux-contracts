@@ -385,39 +385,52 @@ mod tests {
 
     #[test]
     fn test_set_daily_limit_requires_admin_auth() {
+        // Deliberately omit mock_all_auths — admin.require_auth() must reject.
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxPolicy);
         let client = MuxPolicyClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+        });
 
         let wallet = Address::generate(&env);
         let result = client.try_set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         assert!(result.is_err());
         assert!(client.try_get_daily_limit(&wallet).is_err());
-        assert_eq!(env.events().all().len(), 1);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
     fn test_record_spend_requires_wallet_auth() {
+        // Deliberately omit mock_all_auths — wallet.require_auth() must reject.
+        // Seed Admin + a WalletLimit record directly via as_contract so the
+        // auth gate is what is under test, not LimitNotFound.
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxPolicy);
         let client = MuxPolicyClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
         let wallet = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-            client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
-        }
+        let limit = DailyLimit {
+            limit: 1000,
+            spent: 0,
+            reset_ledger: env.ledger().sequence().saturating_add(17_280),
+            day_ledgers: 17_280,
+            registry_id: None,
+        };
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage()
+                .persistent()
+                .set(&DataKey::WalletLimit(wallet.clone()), &limit);
+        });
 
         let result = client.try_record_spend(&wallet, &100_i128);
         assert!(result.is_err());
         assert_eq!(client.get_daily_limit(&wallet).spent, 0);
-        assert_eq!(env.events().all().len(), 2);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -623,7 +636,8 @@ mod tests {
     fn test_ttl_constants() {
         assert_eq!(TTL_THRESHOLD, 17_280);
         assert_eq!(TTL_EXTEND_TO, 518_400);
-        assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
+        // Checked at compile time to satisfy clippy's assertions_on_constants.
+        const _: () = assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
     }
 
     #[test]
