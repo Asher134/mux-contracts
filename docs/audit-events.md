@@ -34,6 +34,8 @@ See [event-topic-conventions.md](event-topic-conventions.md) for naming rules, t
 
 Contract tag: `mux_acct`
 
+> **Note:** `execute_with_session` scope enforcement (T-40) is now active. When a session key registered with an empty `scopes` list is used, the call is rejected with `Unauthorized` before any state mutation occurs. This rejection does **not** emit a `ses_exe` event (no events on error), but it is counted as an authorization failure and visible in host-level error logs. See [threat-model.md](threat-model.md) T-40 and [entrypoint-matrix.md](entrypoint-matrix.md) for the full fail-closed scope enforcement description.
+
 | Action | Trigger | Data payload |
 |---|---|---|
 | `init` | `initialize` succeeds | `owner: Address` |

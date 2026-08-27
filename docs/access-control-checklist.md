@@ -40,8 +40,9 @@ Legend:
       emits `executed` event on success.
 - [ ] `register_session_key` / `revoke_session_key` — `require_owner` helper called.
 - [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Fail-closed scope enforcement (T-40):** a key registered with an empty `scopes` list is rejected with `Unauthorized` (unit test: `test_execute_with_session_rejects_empty_scopes`). Remaining limitation: `payload` is not decoded or dispatched, so a **non-empty** scope list is not matched against the payload's target method — see `docs/aa_sequence_diagram.md`.
-- [ ] `set_metadata` — `require_owner` helper called.
-- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`); emits `ses_exe` event on success.
+
+> **Implementation note (T-40):** Empty-scopes rejection is implemented and enforced fail-closed — a session key with an empty `scopes` list is rejected with `Unauthorized` before any state mutation (T-40 partial close). The remaining tracked limitation is that a **non-empty** scope list is not yet matched against the payload's target method; per-method payload matching requires the payload decoder to be implemented first. Until then, a key with a non-empty scope list passes scope validation regardless of what method the payload targets.
+
 - [ ] `set_metadata` — `require_owner` helper called; emits `meta_set` event.
 - [ ] No public function mutates storage without an auth check.
 
