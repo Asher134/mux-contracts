@@ -96,7 +96,7 @@ Legend:
 - [ ] `approve_recovery` — `guardian.require_auth()` + `require_guardian` helper called; rejects duplicate approvals.
 - [ ] `cancel_recovery` — `require_owner` helper called; only current owner can cancel.
 - [ ] `execute_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
-- [ ] `approve_recovery_admin` — `require_owner` helper called; lets the owner bypass the timelock for a pending recovery.
+- [ ] `approve_recovery_admin` — `require_owner` helper called **and** `co_guardian.require_auth()` + `require_guardian` called; both the owner and a registered guardian must co-sign to bypass the timelock — owner alone cannot execute the fast path.
 - [ ] `add_guardian` / `remove_guardian` — `require_owner` helper called; `remove_guardian` additionally rejects removing the last guardian.
 - [ ] `set_quorum_threshold` — `require_owner` helper called; threshold must be >= 1 and <= guardian count.
 - [ ] `set_registry` — the caller-supplied `owner` must equal the stored owner (`Unauthorized` otherwise); `owner.require_auth()` called before storage write.
