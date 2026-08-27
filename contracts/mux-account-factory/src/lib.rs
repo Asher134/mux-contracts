@@ -13,7 +13,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    String, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -36,6 +37,9 @@ pub enum DataKey {
     AccountCount,
     /// Metadata for a specific account: DataKey::Metadata(owner, account_address)
     Metadata(Address, Address),
+    /// Optional upgrade authority set once by `initialize`. A factory that is
+    /// never initialized has no admin and cannot be upgraded on-chain.
+    Admin,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -69,6 +73,10 @@ pub enum MuxAccountFactoryError {
     // STORAGE-GRIEFING: unbounded metadata string sizes would let an owner
     // bloat instance storage indefinitely.
     MetadataTooLarge = 5,
+    /// `upgrade()` was called before `initialize()` — no admin is stored.
+    NotInitialized = 6,
+    /// `initialize()` was called more than once on the same instance.
+    AlreadyInitialized = 7,
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -102,6 +110,49 @@ pub struct MuxAccountFactory;
 
 #[contractimpl]
 impl MuxAccountFactory {
+    /// Optional one-time setup that records an upgrade authority for this factory.
+    ///
+    /// Calling `initialize` is **not** required for the factory to register accounts —
+    /// `deploy_account` and `deploy_account_with_metadata` work without it. It only
+    /// establishes the admin address that is later required by `upgrade()`. A factory
+    /// that is never initialized has no on-chain upgrade path (`NotInitialized`).
+    ///
+    /// # Errors
+    /// - [`MuxAccountFactoryError::AlreadyInitialized`] if called a second time.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), MuxAccountFactoryError> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(MuxAccountFactoryError::AlreadyInitialized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM. Admin only.
+    ///
+    /// Requires that `initialize(admin)` was called first. Returns
+    /// `NotInitialized` (fail-closed) if no admin is stored — a factory that
+    /// was never initialized simply cannot be upgraded on-chain.
+    ///
+    /// See `docs/contract-upgrade-pattern.md` for storage-compatibility rules
+    /// that must be observed between versions. Instance storage (all accounts,
+    /// counts, and metadata) is preserved across upgrades by the Soroban host.
+    ///
+    /// Extends the instance storage TTL so an upgrade performed just before a
+    /// long quiet period does not leave storage at risk of expiry (T-21).
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), MuxAccountFactoryError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(MuxAccountFactoryError::NotInitialized)?;
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
     /// Register a new account for the given owner without metadata.
     ///
     /// The caller must be `owner` (`owner.require_auth()` is called before any
@@ -241,15 +292,7 @@ impl MuxAccountFactory {
         let mut accounts = Self::load_accounts_under_cap(&env, &owner)?;
 
         // STORAGE-GRIEFING: validate metadata string sizes to prevent storage bloat.
-        if version.len() > MAX_VERSION_LENGTH {
-            return Err(MuxAccountFactoryError::MetadataTooLarge);
-        }
-        if description.len() > MAX_DESCRIPTION_LENGTH {
-            return Err(MuxAccountFactoryError::MetadataTooLarge);
-        }
-        if author.len() > MAX_AUTHOR_LENGTH {
-            return Err(MuxAccountFactoryError::MetadataTooLarge);
-        }
+        Self::validate_metadata(&version, &description, &author)?;
 
         accounts.push_back(account_address.clone());
         env.storage()
@@ -368,12 +411,7 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::InvalidAccount);
         }
         let _ = Self::load_accounts_under_cap(&env, &owner)?;
-        if version.len() > MAX_VERSION_LENGTH
-            || description.len() > MAX_DESCRIPTION_LENGTH
-            || author.len() > MAX_AUTHOR_LENGTH
-        {
-            return Err(MuxAccountFactoryError::MetadataTooLarge);
-        }
+        Self::validate_metadata(&version, &description, &author)?;
         Ok(account_address)
     }
 
@@ -414,6 +452,20 @@ impl MuxAccountFactory {
             return Err(MuxAccountFactoryError::TooManyAccounts);
         }
         Ok(accounts)
+    }
+
+    fn validate_metadata(
+        version: &String,
+        description: &String,
+        author: &String,
+    ) -> Result<(), MuxAccountFactoryError> {
+        if version.len() > MAX_VERSION_LENGTH
+            || description.len() > MAX_DESCRIPTION_LENGTH
+            || author.len() > MAX_AUTHOR_LENGTH
+        {
+            return Err(MuxAccountFactoryError::MetadataTooLarge);
+        }
+        Ok(())
     }
 
     fn extend_ttl(env: &Env) {
@@ -1234,6 +1286,36 @@ mod tests {
         client.deploy_account(&owner, &account_addr);
         assert_eq!(client.get_accounts(&owner).len(), 1);
         assert_eq!(client.account_count(), 1);
+    }
+
+    /// Metadata simulation must be a complete read-only preflight: it cannot
+    /// create an account, increment the global counter, store metadata, or emit
+    /// an event before the real deployment is submitted.
+    #[test]
+    fn test_simulate_with_metadata_is_read_only() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let account_addr = Address::generate(&env);
+        let version = String::from_str(&env, "1.0.0");
+        let description = String::from_str(&env, "Read-only preflight");
+        let author = String::from_str(&env, "mux-labs");
+
+        let result = client.simulate_deploy_with_metadata(
+            &owner,
+            &account_addr,
+            &version,
+            &description,
+            &author,
+        );
+
+        assert_eq!(result, Ok(account_addr));
+        assert_eq!(client.get_accounts(&owner).len(), 0);
+        assert_eq!(client.account_count(), 0);
+        assert_eq!(
+            client.try_get_account_metadata(&owner, &account_addr),
+            Err(Ok(MuxAccountFactoryError::MetadataNotFound))
+        );
+        assert_eq!(env.events().all().len(), 0);
     }
 
     // ── cross-owner metadata isolation ────────────────────────────────────────

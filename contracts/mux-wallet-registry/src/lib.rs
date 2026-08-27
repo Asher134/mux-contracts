@@ -49,8 +49,8 @@
 extern crate alloc;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -150,6 +150,24 @@ impl MuxWalletRegistry {
             .instance()
             .set(&DataKey::Names, &Vec::<Symbol>::new(&env));
         emit(&env, symbol_short!("init"), owner);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM. Owner only.
+    ///
+    /// See `docs/contract-upgrade-pattern.md` for storage-compatibility rules
+    /// that must be observed between versions. Instance storage (owner, wallet
+    /// entries, and names list) is preserved across upgrades by the Soroban host.
+    ///
+    /// Extends the instance storage TTL so an upgrade performed just before a
+    /// long quiet period does not leave storage at risk of expiry (T-21).
+    ///
+    /// # Errors
+    /// - [`WalletRegistryError::NotInitialized`] if `initialize` was never called.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), WalletRegistryError> {
+        Self::require_owner(&env)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -739,10 +757,11 @@ mod tests {
         let cid = env.register_contract(None, MuxWalletRegistry);
         let client = MuxWalletRegistryClient::new(&env, &cid);
         let owner = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&owner);
-        }
+        // Seed the Owner key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Owner, &owner);
+        });
 
         // No mock_all_auths — require_auth must reject.
         let name = symbol_short!("alice");
@@ -774,10 +793,11 @@ mod tests {
         let cid = env.register_contract(None, MuxWalletRegistry);
         let client = MuxWalletRegistryClient::new(&env, &cid);
         let owner = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&owner);
-        }
+        // Seed the Owner key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Owner, &owner);
+        });
 
         let name = symbol_short!("bob");
         let wallet = Address::generate(&env);
@@ -814,10 +834,11 @@ mod tests {
         let client = MuxWalletRegistryClient::new(&env, &cid);
         let owner = Address::generate(&env);
 
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&owner);
-        }
+        // Seed the Owner key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Owner, &owner);
+        });
 
         // Attempt register_wallet without a mocked signer — host rejects.
         let name = symbol_short!("carol");
@@ -840,10 +861,11 @@ mod tests {
         let client = MuxWalletRegistryClient::new(&env, &cid);
         let owner = Address::generate(&env);
 
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&owner);
-        }
+        // Seed the Owner key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
+        env.as_contract(&cid, || {
+            env.storage().instance().set(&DataKey::Owner, &owner);
+        });
 
         let name = symbol_short!("dave");
         let wallet = Address::generate(&env);
@@ -882,10 +904,14 @@ mod tests {
         let cid_unauth = env_unauth.register_contract(None, MuxWalletRegistry);
         let c_unauth = MuxWalletRegistryClient::new(&env_unauth, &cid_unauth);
         let owner_unauth = Address::generate(&env_unauth);
-        {
-            let _guard = env_unauth.mock_all_auths();
-            c_unauth.initialize(&owner_unauth);
-        }
+        // Seed the Owner key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
+        env_unauth.as_contract(&cid_unauth, || {
+            env_unauth
+                .storage()
+                .instance()
+                .set(&DataKey::Owner, &owner_unauth);
+        });
         let name_unauth = symbol_short!("bob");
         let wallet_unauth = Address::generate(&env_unauth);
         let result = c_unauth.try_register_wallet(&name_unauth, &wallet_unauth);

@@ -23,7 +23,12 @@ Legend:
 
 ### 1.1 `mux-account`
 
+> **Immutable by design** — no `upgrade()` entry point exists or will be added.
+> See [account-upgrade-migration.md](account-upgrade-migration.md) and
+> [upgrade-auth-requirements.md](upgrade-auth-requirements.md).
+
 - [ ] `initialize` — `owner.require_auth()` called before any storage write.
+- [ ] `pause` — `require_owner` helper called; sets `DataKey::Paused` to `true`; emits `paused` event.
 - [ ] `set_delegate` — `require_owner` helper called; verifies `owner.require_auth()`.
 - [ ] `remove_delegate` — `require_owner` helper called.
 - [ ] `set_spend_limit` — `require_owner` helper called.
@@ -31,18 +36,22 @@ Legend:
 - [ ] `execute` — `require_owner` helper called; spend limit is checked and the
       reentrancy guard acquired before `target` is invoked, but the debit is
       only written to storage — and the guard only released — after
-      `invoke_contract` returns (checks-effects-interactions; see §5.2).
+      `invoke_contract` returns (checks-effects-interactions; see §5.2);
+      emits `executed` event on success.
 - [ ] `register_session_key` / `revoke_session_key` — `require_owner` helper called.
-- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`).
-- [ ] `set_metadata` — `require_owner` helper called.
+- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Fail-closed scope enforcement (T-40):** a key registered with an empty `scopes` list is rejected with `Unauthorized` (unit test: `test_execute_with_session_rejects_empty_scopes`). Remaining limitation: `payload` is not decoded or dispatched, so a **non-empty** scope list is not matched against the payload's target method — see `docs/aa_sequence_diagram.md`.
+
+> **Implementation note (T-40):** Empty-scopes rejection is implemented and enforced fail-closed — a session key with an empty `scopes` list is rejected with `Unauthorized` before any state mutation (T-40 partial close). The remaining tracked limitation is that a **non-empty** scope list is not yet matched against the payload's target method; per-method payload matching requires the payload decoder to be implemented first. Until then, a key with a non-empty scope list passes scope validation regardless of what method the payload targets.
+
+- [ ] `set_metadata` — `require_owner` helper called; emits `meta_set` event.
 - [ ] No public function mutates storage without an auth check.
 
 ### 1.2 `mux-batcher`
 
-- [ ] `execute_batch` — `caller.require_auth()` called before any operations are dispatched.
-- [ ] `simulate_batch` — `caller.require_auth()` called (preflight is also auth-gated).
+- [ ] `execute_batch` — `caller.require_auth()` called before any operations are dispatched; emits `bat_start` before execution, `executed`/`bat_ok`/`bat_abort` on completion.
+- [ ] `simulate_batch` — `caller.require_auth()` called (preflight is also auth-gated); emits `sim_done` on completion.
 - [ ] `submit_batch` — delegates to `execute_batch`, deriving `caller` from the invoker; same auth guarantee applies.
-- [ ] `set_registry_metadata` — **intentionally no auth check**; write-once (rejects with `MetadataAlreadySet` on a second call), expected to be called by the deployer immediately after deployment. Confirm this write-once guard is still in place if this function changes.
+- [ ] `set_registry_metadata` — `require_admin` helper called before the `MetadataAlreadySet` check (fail-closed: unauthenticated callers cannot probe metadata state); returns `NotInitialized` if `initialize` was never called.
 - [ ] Batch operations are dispatched under the **caller's** auth context, not the batcher contract's.
 - [ ] `initialize` — `admin.require_auth()` called before storage write; optional (batching works without it).
 - [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; no silent skip of the auth check.
@@ -53,11 +62,11 @@ Legend:
 - [ ] `create_role` — `require_admin` helper called.
 - [ ] `grant_role` — `require_admin` helper called.
 - [ ] `revoke_role` — `require_admin` helper called.
-- [ ] `has_permission`, `get_roles`, `get_role_members` — read-only; no auth required (acceptable).
+- [ ] `has_permission`, `get_roles`, `get_role_members` — read-only; no auth required (acceptable); `has_permission` emits `perm_ok` on grant only, nothing on denial.
 - [ ] `set_admin_threshold` — `require_admin` helper called.
 - [ ] `propose_admin` — `require_admin` helper called.
 - [ ] `approve_admin` — `require_admin` helper called, plus `approver.require_auth()` for the individual approval.
-- [ ] `set_metadata` — `require_admin` helper called.
+- [ ] `set_metadata` — `require_admin` helper called; emits `meta_set` event.
 - [ ] No role or admin-set mutation is possible without admin signature.
 - [ ] No role mutation is possible without admin signature.
 - [ ] `upgrade` — `require_admin` helper called; WASM upgrade is admin-gated (same helper used by role and multisig-rotation entrypoints).
@@ -78,27 +87,59 @@ Legend:
 - [ ] `register` — `require_admin` helper called.
 - [ ] `register_with_metadata` — `require_admin` helper called.
 - [ ] `get_version`, `get_metadata`, `list_contracts`, `check_version` — read-only; no auth required (acceptable).
+- [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called.
 - [ ] No registry mutation is possible without admin signature.
 
 ### 1.6 `mux-recovery`
 
 - [ ] `initialize` — `owner.require_auth()` called before storage write.
 - [ ] `initiate_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
+- [ ] `approve_recovery` — `guardian.require_auth()` + `require_guardian` helper called; rejects duplicate approvals.
 - [ ] `cancel_recovery` — `require_owner` helper called; only current owner can cancel.
 - [ ] `execute_recovery` — `guardian.require_auth()` + `require_guardian` helper called.
-- [ ] `approve_recovery_admin` — `require_owner` helper called; lets the owner bypass the timelock for a pending recovery.
+- [ ] `approve_recovery_admin` — `require_owner` helper called **and** `co_guardian.require_auth()` + `require_guardian` called; both the owner and a registered guardian must co-sign to bypass the timelock — owner alone cannot execute the fast path.
 - [ ] `add_guardian` / `remove_guardian` — `require_owner` helper called; `remove_guardian` additionally rejects removing the last guardian.
-- [ ] `set_registry` — `owner.require_auth()` called.
+- [ ] `set_quorum_threshold` — `require_owner` helper called; threshold must be >= 1 and <= guardian count.
+- [ ] `set_registry` — the caller-supplied `owner` must equal the stored owner (`Unauthorized` otherwise); `owner.require_auth()` called before storage write.
+- [ ] `upgrade` — `require_owner` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; should not be called while a `Pending` recovery is in flight.
 - [ ] No recovery mutation is possible without guardian or owner authorization.
 
 ### 1.7 `mux-delegation`
 
 - [ ] `grant_delegate` — `owner.require_auth()` called before any storage write.
 - [ ] `revoke_delegate` — `owner.require_auth()` called before any storage write.
-- [ ] `link_contract_id` — the caller-supplied `admin` parameter authorizes **itself**; this is **not** checked against any stored admin identity, so it is not a privileged gate against other callers — see `docs/delegation-upgrade.md`.
+- [ ] `link_contract_id` — the caller-supplied `admin` parameter authorizes **itself**; this is **not** checked against any stored admin identity, so it is not a privileged gate against other callers — see `docs/delegation-upgrade.md`; emits `dlg_link` event on success.
 - [ ] `initialize` — `admin.require_auth()` called before storage write; optional (delegation grants work without it) and establishes a **separate** stored admin used only by `upgrade`.
 - [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called.
 - [ ] `get_delegate_permissions`, `is_delegate`, `get_delegates`, `check_delegate`, `get_contract_id` — read-only; no auth required (acceptable).
+
+### 1.8 `mux-spending-policy`
+
+- [ ] `initialize` — `admin.require_auth()` called before storage write.
+- [ ] `set_policy` — `require_admin` helper called **before** input validation (fail-closed: unauthenticated callers cannot probe validation state); only admin can configure limits.
+- [ ] `set_policy` — rejects `period_ledgers == 0` with `InvalidPeriod` and `limit <= 0` with `InvalidInput`; no policy is stored and no `lmt_set` event is emitted on either rejection (unit tests: `test_set_policy_rejects_zero_period`, `test_set_policy_rejects_non_positive_limit`, `test_set_policy_auth_checked_before_period_validation`).
+- [ ] `get_policy`, `check_spend` — read-only or validation-only; no auth required (acceptable).
+- [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; WASM upgrade is admin-gated.
+- [ ] No policy mutation is possible without admin signature.
+
+### 1.9 `mux-wallet-registry`
+
+- [ ] `initialize` — `owner.require_auth()` called before storage write.
+- [ ] `register_wallet` — `require_owner` helper called; only owner can register wallets.
+- [ ] `register_wallet_with_metadata` — `require_owner` helper called; only owner can register wallets.
+- [ ] `get_wallet`, `get_metadata`, `list_wallets` — read-only; no auth required (acceptable).
+- [ ] `upgrade` — `require_owner` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; WASM upgrade is owner-gated.
+- [ ] No wallet registry mutation is possible without owner signature.
+
+### 1.10 `mux-account-factory`
+
+- [ ] `initialize` — `admin.require_auth()` called before storage write; optional (account registration works without it) and establishes a stored admin used only by `upgrade`.
+- [ ] `deploy_account` — `owner.require_auth()` called per-call; no stored admin required.
+- [ ] `deploy_account_with_metadata` — `owner.require_auth()` called per-call.
+- [ ] `simulate_deploy` / `simulate_deploy_with_metadata` — read-only dry-runs; no auth required (acceptable).
+- [ ] `get_accounts`, `account_count`, `get_account_metadata`, `max_accounts_per_owner` — read-only; no auth required (acceptable).
+- [ ] `upgrade` — stored `DataKey::Admin` read and `admin.require_auth()` called; `NotInitialized` (fail-closed) if `initialize` was never called.
+- [ ] No upgrade path is possible without the explicitly initialized admin signature.
 
 ---
 
@@ -284,10 +325,15 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 
 ## 8. Unit Test Coverage
 
-- [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period, `execute()` reentrancy guard held across invocation (§5.2), guard released on rejection paths.
-- [ ] `mux-batcher`: empty batch, oversized batch, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
-- [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
-- [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period, `execute()` reentrancy guard held across invocation (§5.2), guard released on rejection paths, `executed`/`meta_set` event emission.
+- [ ] `mux-batcher`: empty batch, oversized batch, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection, `bat_start`/`bat_abort`/`sim_done` event emission.
+- [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection, `dlg_link` event emission.
+- [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection, `perm_ok` event emission on grant only.
+- [ ] `mux-registry`: initialize, double-initialize, register/register-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-spending-policy`: initialize, double-initialize, set-policy (including `limit <= 0` → `InvalidInput`, `period_ledgers == 0` → `InvalidPeriod`, and auth-before-validation ordering), check-spend, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-wallet-registry`: initialize, double-initialize, register-wallet, register-wallet-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-recovery`: initialize, double-initialize, initiate/cancel/execute recovery, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-account-factory`: deploy-account, deploy-with-metadata, cap enforcement, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] All `require_owner` / `require_admin` paths have a negative test (unauthorized caller).
 - [ ] All `AlreadyInitialized` paths have a test.
 - [ ] CI runs `cargo test --workspace --all-features` on every PR (see `.github/workflows/ci.yml`).
@@ -296,7 +342,7 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 
 ## 9. CI / CD Verification
 
-- [ ] `cargo clippy --workspace --all-features -- -D warnings` passes with no warnings.
+- [ ] `cargo clippy --workspace --all-features --all-targets -- -D warnings` passes with no warnings.
 - [ ] `cargo fmt --check` passes.
 - [ ] Bindings drift check (`check-binding-drift` job) passes on PRs.
 - [ ] Release builds use `[profile.release]` with `overflow-checks = true` and `panic = "abort"`.

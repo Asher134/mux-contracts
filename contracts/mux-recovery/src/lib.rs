@@ -62,13 +62,16 @@
  *
  * | Action     | Trigger             | Data payload                                                   |
  * |------------|---------------------|----------------------------------------------------------------|
- * | `init`     | `initialize`        | `owner: Address`                                               |
- * | `rec_init` | `initiate_recovery` | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
- * | `rec_exec` | `execute_recovery`  | `(guardian: Address, new_owner: Address)`                      |
- * | `rec_cncl` | `cancel_recovery`   | `()`                                                           |
- * | `grd_add`  | `add_guardian`      | `(owner: Address, guardian: Address)`                          |
- * | `grd_rm`   | `remove_guardian`   | `(owner: Address, guardian: Address)`                          |
- * | `reg_link` | `set_registry`      | `registry_id: Address`                                         |
+ * | `init`     | `initialize`           | `owner: Address`                                               |
+ * | `rec_init` | `initiate_recovery`    | `(guardian, new_owner, initiated_at, executable_at, expires_at)` |
+ * | `rec_appr` | `approve_recovery`     | `(guardian: Address, approval_count: u32)`                     |
+ * | `rec_exec` | `execute_recovery`     | `(guardian: Address, new_owner: Address)`                      |
+ * | `rec_adm`  | `approve_recovery_admin` | `new_owner: Address`                                          |
+ * | `rec_cncl` | `cancel_recovery`      | `()`                                                           |
+ * | `grd_add`  | `add_guardian`         | `guardian: Address`                                            |
+ * | `grd_rm`   | `remove_guardian`      | `guardian: Address`                                            |
+ * | `qrm_set`  | `set_quorum_threshold` | `threshold: u32`                                               |
+ * | `reg_link` | `set_registry`         | `registry_id: Address`                                         |
  *
  * See [`docs/recovery-trust-model.md`] and [`docs/audit-events.md`] for
  * full security model and event schema reference.
@@ -80,7 +83,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
 };
 
 // ── Audit events ──────────────────────────────────────────────────────────────
@@ -201,14 +204,14 @@ pub enum RecoveryStatus {
 ///   executableAt: u32;      // Earliest ledger for execute_recovery
 ///   expiresAt: u32;         // Latest ledger; auto-expires after this
 ///   status: RecoveryStatus; // None | Pending | Executed | Cancelled
+///   approvals: Address[];   // Guardians who have approved (M-of-N quorum)
 /// }
 /// ```
 ///
 /// # Storage griefing
 ///
-/// Recovery storage is a single `RecoveryRequest` (≤~200 bytes) and does
-/// **not** use unbounded Vec/Map collections, so instance storage growth is
-/// inherently bounded.
+/// The `approvals` Vec is bounded by `MAX_GUARDIANS` (16 entries), so
+/// instance storage growth remains inherently bounded.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecoveryRequest {
@@ -225,6 +228,12 @@ pub struct RecoveryRequest {
     pub expires_at: u32,
     /// Current lifecycle state.
     pub status: RecoveryStatus,
+    /// Guardians who have approved this recovery request.
+    ///
+    /// `initiate_recovery` adds the initiating guardian as the first approval.
+    /// Additional guardians call `approve_recovery` to add their approval.
+    /// `execute_recovery` requires `approvals.len() >= quorum_threshold`.
+    pub approvals: Vec<Address>,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -235,6 +244,7 @@ pub enum DataKey {
     Guardians,
     Recovery,
     RegistryId,
+    QuorumThreshold,
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────────
@@ -254,6 +264,9 @@ pub enum RecoveryError {
     GuardianNotFound = 9,
     MinGuardiansRequired = 10,
     RecoveryExpired = 11,
+    QuorumNotReached = 12,
+    DuplicateApproval = 13,
+    InvalidQuorumThreshold = 14,
 }
 
 // ── Storage TTL ───────────────────────────────────────────────────────────────
@@ -272,21 +285,58 @@ pub struct MuxRecovery;
 
 #[contractimpl]
 impl MuxRecovery {
-    /// Initialize the recovery contract with an owner and a guardian set.
+    /// Initialize the recovery contract with an owner, a guardian set, and a
+    /// quorum threshold.
+    ///
+    /// # Arguments
+    /// * `quorum_threshold` — number of guardian approvals required to execute
+    ///   recovery. Must be >= 1 and <= guardians.len(). A threshold of 1
+    ///   preserves the previous single-guardian behaviour.
     pub fn initialize(
         env: Env,
         owner: Address,
         guardians: Vec<Address>,
+        quorum_threshold: u32,
     ) -> Result<(), RecoveryError> {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(RecoveryError::AlreadyInitialized);
+        }
+        if quorum_threshold == 0 || quorum_threshold > guardians.len() {
+            return Err(RecoveryError::InvalidQuorumThreshold);
         }
         owner.require_auth();
         env.storage().instance().set(&DataKey::Owner, &owner);
         env.storage()
             .instance()
             .set(&DataKey::Guardians, &guardians);
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumThreshold, &quorum_threshold);
         emit(&env, symbol_short!("init"), owner);
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract WASM. Owner only.
+    ///
+    /// See `docs/contract-upgrade-pattern.md` for storage-compatibility rules
+    /// that must be observed between versions. Instance storage (owner,
+    /// guardians, active recovery request, and registry link) is preserved
+    /// across upgrades by the Soroban host.
+    ///
+    /// **Recovery time-criticality note**: a WASM upgrade should never be
+    /// performed while a `Pending` recovery is in flight, as the upgrade
+    /// temporarily changes the executing code while the timelock window is
+    /// open. Verify `recovery_status()` is not `Pending` before upgrading.
+    ///
+    /// Extends the instance storage TTL so an upgrade performed just before a
+    /// long quiet period does not leave storage at risk of expiry (T-21).
+    ///
+    /// # Errors
+    /// - [`RecoveryError::NotInitialized`] if `initialize` was never called.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -294,7 +344,8 @@ impl MuxRecovery {
     /// Initiate a recovery request. Must be called by a registered guardian.
     ///
     /// Only one pending recovery may exist at a time. The timelock starts
-    /// at the current ledger sequence.
+    /// at the current ledger sequence. The initiating guardian's address is
+    /// recorded as the first approval toward the quorum threshold.
     pub fn initiate_recovery(
         env: Env,
         guardian: Address,
@@ -312,12 +363,16 @@ impl MuxRecovery {
         }
 
         let initiated_at = env.ledger().sequence();
+        // The initiating guardian counts as the first approval.
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(guardian.clone());
         let request = RecoveryRequest {
             new_owner: new_owner.clone(),
             initiated_at,
             executable_at: initiated_at.saturating_add(RECOVERY_TIMELOCK),
             expires_at: initiated_at.saturating_add(RECOVERY_EXPIRY),
             status: RecoveryStatus::Pending,
+            approvals,
         };
         env.storage().instance().set(&DataKey::Recovery, &request);
         // Carry the timelock window in the payload so indexers can surface the
@@ -337,6 +392,36 @@ impl MuxRecovery {
         Ok(())
     }
 
+    /// Add a guardian's approval to a pending recovery request.
+    ///
+    /// Each registered guardian may approve at most once per request. Once
+    /// the number of approvals reaches the stored quorum threshold the
+    /// request is ready to be executed via `execute_recovery`.
+    ///
+    /// Emits a `rec_appr` event recording the approving guardian and the
+    /// running approval count.
+    pub fn approve_recovery(env: Env, guardian: Address) -> Result<(), RecoveryError> {
+        guardian.require_auth();
+        Self::require_guardian(&env, &guardian)?;
+        let mut request = Self::require_pending(&env)?;
+
+        // Prevent a guardian from approving the same request twice.
+        if request.approvals.contains(&guardian) {
+            return Err(RecoveryError::DuplicateApproval);
+        }
+
+        request.approvals.push_back(guardian.clone());
+        let approval_count = request.approvals.len();
+        env.storage().instance().set(&DataKey::Recovery, &request);
+        emit(
+            &env,
+            symbol_short!("rec_appr"),
+            (guardian, approval_count),
+        );
+        Self::extend_ttl(&env);
+        Ok(())
+    }
+
     /// Cancel a pending recovery. May be called by the current owner at any
     /// time before the recovery is executed.
     pub fn cancel_recovery(env: Env) -> Result<(), RecoveryError> {
@@ -349,10 +434,12 @@ impl MuxRecovery {
         Ok(())
     }
 
-    /// Execute a recovery after the timelock has expired.
+    /// Execute a recovery after the timelock has expired and the quorum
+    /// threshold has been reached.
     ///
-    /// Must be called by a registered guardian. Transfers ownership to
-    /// `RecoveryRequest.new_owner`.
+    /// Must be called by a registered guardian. Checks that the number of
+    /// approvals stored on the request is >= the contract's quorum threshold.
+    /// Transfers ownership to `RecoveryRequest.new_owner`.
     pub fn execute_recovery(env: Env, guardian: Address) -> Result<(), RecoveryError> {
         guardian.require_auth();
         Self::require_guardian(&env, &guardian)?;
@@ -365,6 +452,16 @@ impl MuxRecovery {
             return Err(RecoveryError::RecoveryExpired);
         }
 
+        // Enforce M-of-N quorum: require enough approvals before execution.
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::QuorumThreshold)
+            .unwrap_or(1);
+        if request.approvals.len() < threshold {
+            return Err(RecoveryError::QuorumNotReached);
+        }
+
         let new_owner = request.new_owner.clone();
         request.status = RecoveryStatus::Executed;
         env.storage().instance().set(&DataKey::Owner, &new_owner);
@@ -375,18 +472,35 @@ impl MuxRecovery {
     }
 
     /// Admin-approved recovery: allow the current owner to approve and
-    /// execute a pending recovery immediately. This is intended for cases
-    /// where the owner consents to transfer without waiting the timelock.
-    pub fn approve_recovery_admin(env: Env) -> Result<(), RecoveryError> {
-        // Ensure caller is the current owner.
+    /// execute a pending recovery immediately, with a guardian co-signing to
+    /// prevent the owner from unilaterally bypassing the 24-hour timelock.
+    ///
+    /// Both the owner **and** at least one registered guardian must authorize
+    /// this call. The guardian co-sign requirement ensures the timelock bypass
+    /// cannot be triggered by a compromised owner key alone — the attacker
+    /// would also need to control a guardian key.
+    ///
+    /// # Arguments
+    /// * `co_guardian` — a registered guardian address whose auth is required
+    ///   alongside the owner's auth.
+    ///
+    /// # Errors
+    /// * `Unauthorized` — caller is not the owner, or `co_guardian` is not a
+    ///   registered guardian.
+    /// * `NoActiveRecovery` — no pending recovery request exists.
+    pub fn approve_recovery_admin(env: Env, co_guardian: Address) -> Result<(), RecoveryError> {
+        // Both owner AND the specified co-guardian must authorize.
         Self::require_owner(&env)?;
+        co_guardian.require_auth();
+        Self::require_guardian(&env, &co_guardian)?;
+
         let mut request = Self::require_pending(&env)?;
         let new_owner = request.new_owner.clone();
         request.status = RecoveryStatus::Executed;
         env.storage().instance().set(&DataKey::Owner, &new_owner);
         env.storage().instance().set(&DataKey::Recovery, &request);
         // Emit a distinct audit event for owner-approved recoveries.
-        emit(&env, symbol_short!("rec_adm"), (new_owner.clone()));
+        emit(&env, symbol_short!("rec_adm"), new_owner.clone());
         Self::extend_ttl(&env);
         Ok(())
     }
@@ -474,16 +588,27 @@ impl MuxRecovery {
 
     /// Link a registry contract address to this recovery contract.
     ///
-    /// Only the current owner may call this method. Emits a `reg_link` audit
-    /// event and extends instance TTL.
+    /// Only the current owner may call this method. The caller-supplied
+    /// `owner` argument must equal the stored owner — a mismatch is rejected
+    /// with [`RecoveryError::Unauthorized`] — and `owner.require_auth()` is
+    /// called before the storage write. Emits a `reg_link` audit event and
+    /// extends instance TTL.
     pub fn set_registry(
         env: Env,
         owner: Address,
         registry_id: Address,
     ) -> Result<(), RecoveryError> {
-        // Ensure the contract is initialised before accepting a registry link.
-        if !env.storage().instance().has(&DataKey::Owner) {
-            return Err(RecoveryError::NotInitialized);
+        // Fail-closed: the caller-supplied `owner` must be the stored owner.
+        // Otherwise any stranger could pass their own address, satisfy
+        // `owner.require_auth()` with their own signature, and re-link the
+        // registry to mislead off-chain tooling.
+        let stored_owner: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Owner)
+            .ok_or(RecoveryError::NotInitialized)?;
+        if stored_owner != owner {
+            return Err(RecoveryError::Unauthorized);
         }
         owner.require_auth();
         env.storage()
@@ -497,6 +622,41 @@ impl MuxRecovery {
     /// Return the linked registry contract address, or `None` if not set.
     pub fn registry_id(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::RegistryId)
+    }
+
+    /// Return the current quorum threshold.
+    ///
+    /// The threshold is the minimum number of guardian approvals required
+    /// before `execute_recovery` may be called. Defaults to 1 if never set
+    /// (preserves backward compatibility for contracts upgraded without
+    /// migration).
+    pub fn quorum_threshold(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::QuorumThreshold)
+            .unwrap_or(1)
+    }
+
+    /// Update the quorum threshold. Owner only.
+    ///
+    /// The new threshold must be >= 1 and <= the current guardian count.
+    /// Emits a `qrm_set` audit event.
+    pub fn set_quorum_threshold(env: Env, threshold: u32) -> Result<(), RecoveryError> {
+        Self::require_owner(&env)?;
+        let guardians: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardians)
+            .ok_or(RecoveryError::NotInitialized)?;
+        if threshold == 0 || threshold > guardians.len() {
+            return Err(RecoveryError::InvalidQuorumThreshold);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumThreshold, &threshold);
+        emit(&env, symbol_short!("qrm_set"), threshold);
+        Self::extend_ttl(&env);
+        Ok(())
     }
 
     // ── Private helpers ────────────────────────────────────────────────────────
@@ -549,8 +709,8 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         symbol_short,
-        testutils::{Address as _, Events, Ledger},
-        vec, Env, FromVal,
+        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
+        vec, Env, FromVal, IntoVal,
     };
 
     fn topic_action(
@@ -573,7 +733,7 @@ mod tests {
         let client = MuxRecoveryClient::new(&env, &contract_id);
         let owner = Address::generate(&env);
         let guardian = Address::generate(&env);
-        client.initialize(&owner, &vec![&env, guardian.clone()]);
+        client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
         (env, client, owner, guardian)
     }
 
@@ -593,7 +753,11 @@ mod tests {
         let contract_id = env.register_contract(None, MuxRecovery);
         let client = MuxRecoveryClient::new(&env, &contract_id);
         let owner = Address::generate(&env);
-        client.initialize(&owner, &vec![&env]);
+        // A non-empty guardian set is required: quorum_threshold (1) must be
+        // <= guardians.len() (an empty set would fail with
+        // InvalidQuorumThreshold before any storage write).
+        let guardian = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, guardian], &1_u32);
         let events = env.events().all();
         assert_eq!(events.len(), 1);
         assert_eq!(topic_action(&env, &events, 0), symbol_short!("init"));
@@ -603,7 +767,7 @@ mod tests {
     fn test_double_initialize_rejected() {
         let (env, client, owner, _) = setup();
         let err = client
-            .try_initialize(&owner, &vec![&env])
+            .try_initialize(&owner, &vec![&env], &1_u32)
             .unwrap_err()
             .unwrap();
         assert_eq!(err, RecoveryError::AlreadyInitialized);
@@ -829,7 +993,7 @@ mod tests {
         let owner = Address::generate(&env);
         // Initialize with one guardian
         let g1 = Address::generate(&env);
-        client.initialize(&owner, &vec![&env, g1]);
+        client.initialize(&owner, &vec![&env, g1], &1_u32);
         // Fill to MAX_GUARDIANS (16), already have 1
         for _ in 1..MAX_GUARDIANS {
             let _ = client.try_add_guardian(&Address::generate(&env));
@@ -1115,8 +1279,225 @@ mod tests {
     }
 
     #[test]
+    fn test_set_registry_non_owner_rejected() {
+        // Fail-closed: even with auth fully mocked, a caller-supplied `owner`
+        // that is not the stored owner must be rejected. Otherwise any
+        // stranger could re-link the registry with their own signature.
+        let (env, client, _owner, _) = setup();
+        let stranger = Address::generate(&env);
+        let registry = Address::generate(&env);
+        let err = client
+            .try_set_registry(&stranger, &registry)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+        assert_eq!(client.registry_id(), None);
+    }
+
+    #[test]
+    fn test_set_registry_stranger_with_valid_auth_rejected() {
+        // A stranger holding a perfectly valid signature over `set_registry`
+        // must not be able to substitute for the owner: the stored-owner
+        // check fires before `require_auth` is consulted.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let guardian = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, guardian], &1_u32);
+
+        let stranger = Address::generate(&env);
+        let registry = Address::generate(&env);
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_registry",
+                args: vec![
+                    &env,
+                    stranger.clone().into_val(&env),
+                    registry.clone().into_val(&env),
+                ],
+                sub_invokes: &[],
+            },
+        }]);
+
+        let err = client
+            .try_set_registry(&stranger, &registry)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+        assert_eq!(client.registry_id(), None);
+    }
+
+    #[test]
     fn test_symbol_short_reg_link_within_limit() {
         // symbol_short! enforces ≤ 8 chars at compile time.
         let _reg_link = symbol_short!("reg_link");
+    }
+
+    // ── M-of-N quorum tests (#614) ────────────────────────────────────────────
+
+    /// With quorum=1, a single guardian initiating and executing is sufficient
+    /// (backward-compatible behaviour).
+    #[test]
+    fn test_single_guardian_quorum_works() {
+        let (_env, client, _, guardian) = setup(); // setup uses quorum=1
+        let new_owner = Address::generate(&_env);
+        client.initiate_recovery(&guardian, &new_owner);
+        _env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+        assert!(client.try_execute_recovery(&guardian).is_ok());
+        assert_eq!(client.owner(), new_owner);
+    }
+
+    /// With quorum=2, a single guardian initiating and then executing without
+    /// the second approval must be rejected.
+    #[test]
+    fn test_execute_recovery_fails_below_quorum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        // quorum = 2
+        client.initialize(&owner, &vec![&env, g1.clone(), g2.clone()], &2_u32);
+
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&g1, &new_owner); // g1 = 1 approval
+
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+
+        // Only 1 approval, need 2 — must fail.
+        let err = client.try_execute_recovery(&g1).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::QuorumNotReached);
+    }
+
+    /// With quorum=2, the second guardian adds approval and then execution succeeds.
+    #[test]
+    fn test_execute_recovery_succeeds_at_quorum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        // quorum = 2
+        client.initialize(&owner, &vec![&env, g1.clone(), g2.clone()], &2_u32);
+
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&g1, &new_owner); // g1 = 1 approval
+        client.approve_recovery(&g2);              // g2 = 2 approvals
+
+        env.ledger()
+            .with_mut(|l| l.sequence_number += RECOVERY_TIMELOCK + 1);
+
+        assert!(client.try_execute_recovery(&g1).is_ok());
+        assert_eq!(client.owner(), new_owner);
+    }
+
+    /// A guardian cannot approve a recovery request twice.
+    #[test]
+    fn test_duplicate_approval_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, g1.clone(), g2.clone()], &2_u32);
+
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&g1, &new_owner);
+
+        // g1 already approved at initiation; cannot approve again.
+        let err = client.try_approve_recovery(&g1).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::DuplicateApproval);
+    }
+
+    /// A non-guardian cannot add an approval.
+    #[test]
+    fn test_non_guardian_cannot_approve_recovery() {
+        let (env, client, _, guardian) = setup();
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&guardian, &new_owner);
+        let stranger = Address::generate(&env);
+        let err = client.try_approve_recovery(&stranger).unwrap_err().unwrap();
+        assert_eq!(err, RecoveryError::Unauthorized);
+    }
+
+    /// initialize rejects threshold > guardian count.
+    #[test]
+    fn test_initialize_rejects_threshold_exceeding_guardian_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        // 1 guardian, threshold=2 → invalid
+        let err = client
+            .try_initialize(&owner, &vec![&env, g1], &2_u32)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::InvalidQuorumThreshold);
+    }
+
+    /// initialize rejects threshold == 0.
+    #[test]
+    fn test_initialize_rejects_zero_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let err = client
+            .try_initialize(&owner, &vec![&env, g1], &0_u32)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RecoveryError::InvalidQuorumThreshold);
+    }
+
+    /// set_quorum_threshold updates the stored threshold.
+    #[test]
+    fn test_set_quorum_threshold_updates_value() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, g1, g2], &1_u32);
+        assert_eq!(client.quorum_threshold(), 1);
+        client.set_quorum_threshold(&2_u32);
+        assert_eq!(client.quorum_threshold(), 2);
+    }
+
+    /// approve_recovery emits rec_appr event.
+    #[test]
+    fn test_approve_recovery_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, MuxRecovery);
+        let client = MuxRecoveryClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let g1 = Address::generate(&env);
+        let g2 = Address::generate(&env);
+        client.initialize(&owner, &vec![&env, g1.clone(), g2.clone()], &2_u32);
+        let new_owner = Address::generate(&env);
+        client.initiate_recovery(&g1, &new_owner);
+        client.approve_recovery(&g2);
+        let events = env.events().all();
+        // init + rec_init + rec_appr
+        assert_eq!(events.len(), 3);
+        assert_eq!(topic_action(&env, &events, 2), symbol_short!("rec_appr"));
     }
 }

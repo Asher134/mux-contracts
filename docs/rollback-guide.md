@@ -81,12 +81,12 @@ MUX_DEPLOYER_SECRET=S... bash scripts/deploy.sh --network mainnet
 ### Option C — Admin pause (state-preserving)
 
 ```bash
-# Pause the broken contract (requires contract to implement set_active or pause)
+# Pause the broken contract (mux-account implements pause())
 stellar contract invoke \
   --id <BROKEN_CONTRACT_ID> \
   --network mainnet \
   --source <ADMIN_SECRET_KEY> \
-  -- set_active --active false
+  -- pause
 
 # Deploy the fixed version, migrate state, re-enable
 ```

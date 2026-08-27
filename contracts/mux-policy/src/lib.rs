@@ -96,6 +96,10 @@ pub enum MuxPolicyError {
     InvalidPeriod = 7,
     // STORAGE-GRIEFING: unbounded WalletLimit entries would let admin bloat storage.
     TooManyWallets = 8,
+    /// The registry contract linked via `registry_id` is unreachable or not
+    /// a valid mux-registry deployment. `record_spend` is fail-closed: if the
+    /// registry cannot be validated the spend is rejected.
+    RegistryNotFound = 9,
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -225,6 +229,14 @@ impl MuxPolicy {
     ///
     /// Resets the counter if the day window has elapsed, then debits `amount`.
     /// Returns `LimitExceeded` if the debit would exceed the daily limit.
+    ///
+    /// If the wallet's `DailyLimit` record contains a `registry_id`, the
+    /// registry contract at that address is called (`list_contracts`) to
+    /// validate it is a live, accessible registry before the spend is recorded.
+    /// This ensures that a stale or spoofed registry link cannot silently pass
+    /// validation at spend time. The call is fail-closed: if the registry
+    /// contract is unreachable or returns an error, `record_spend` returns
+    /// `RegistryNotFound`.
     pub fn record_spend(env: Env, wallet: Address, amount: i128) -> Result<(), MuxPolicyError> {
         wallet.require_auth();
         if amount <= 0 {
@@ -236,6 +248,19 @@ impl MuxPolicy {
             .persistent()
             .get(&key)
             .ok_or(MuxPolicyError::LimitNotFound)?;
+
+        // Cross-contract registry validation (fail-closed).
+        // If a registry_id is linked, call the registry to confirm it is live.
+        if let Some(ref registry_addr) = record.registry_id {
+            let result = env.try_invoke_contract::<soroban_sdk::Vec<soroban_sdk::Symbol>, soroban_sdk::Error>(
+                registry_addr,
+                &soroban_sdk::Symbol::new(&env, "list_contracts"),
+                soroban_sdk::Vec::new(&env),
+            );
+            if result.is_err() {
+                return Err(MuxPolicyError::RegistryNotFound);
+            }
+        }
 
         // Reset counter if the day window has elapsed.
         if env.ledger().sequence() >= record.reset_ledger {
@@ -360,39 +385,52 @@ mod tests {
 
     #[test]
     fn test_set_daily_limit_requires_admin_auth() {
+        // Deliberately omit mock_all_auths — admin.require_auth() must reject.
+        // Seed the Admin key directly via as_contract (mock_all_auths is a
+        // permanent switch in soroban-sdk 21, not a restorable guard).
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxPolicy);
         let client = MuxPolicyClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-        }
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+        });
 
         let wallet = Address::generate(&env);
         let result = client.try_set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         assert!(result.is_err());
         assert!(client.try_get_daily_limit(&wallet).is_err());
-        assert_eq!(env.events().all().len(), 1);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
     fn test_record_spend_requires_wallet_auth() {
+        // Deliberately omit mock_all_auths — wallet.require_auth() must reject.
+        // Seed Admin + a WalletLimit record directly via as_contract so the
+        // auth gate is what is under test, not LimitNotFound.
         let env = Env::default();
         let contract_id = env.register_contract(None, MuxPolicy);
         let client = MuxPolicyClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
         let wallet = Address::generate(&env);
-        {
-            let _guard = env.mock_all_auths();
-            client.initialize(&admin);
-            client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
-        }
+        let limit = DailyLimit {
+            limit: 1000,
+            spent: 0,
+            reset_ledger: env.ledger().sequence().saturating_add(17_280),
+            day_ledgers: 17_280,
+            registry_id: None,
+        };
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::Admin, &admin);
+            env.storage()
+                .persistent()
+                .set(&DataKey::WalletLimit(wallet.clone()), &limit);
+        });
 
         let result = client.try_record_spend(&wallet, &100_i128);
         assert!(result.is_err());
         assert_eq!(client.get_daily_limit(&wallet).spent, 0);
-        assert_eq!(env.events().all().len(), 2);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]
@@ -574,14 +612,14 @@ mod tests {
     fn test_ttl_extended_on_set_daily_limit() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
     }
 
     #[test]
     fn test_ttl_extended_on_record_spend() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         client.record_spend(&wallet, &100_i128);
     }
 
@@ -589,7 +627,7 @@ mod tests {
     fn test_ttl_extended_on_reset_daily_counter() {
         let (env, client, _) = setup();
         let wallet = Address::generate(&env);
-        client.set_daily_limit(&wallet, &1000_i128, &17280_u32);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
         client.reset_daily_counter(&wallet);
     }
 
@@ -598,7 +636,8 @@ mod tests {
     fn test_ttl_constants() {
         assert_eq!(TTL_THRESHOLD, 17_280);
         assert_eq!(TTL_EXTEND_TO, 518_400);
-        assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
+        // Checked at compile time to satisfy clippy's assertions_on_constants.
+        const _: () = assert!(TTL_EXTEND_TO > TTL_THRESHOLD);
     }
 
     #[test]
@@ -701,5 +740,51 @@ mod tests {
         for sym in tags.iter().chain(actions.iter()) {
             let _ = sym;
         }
+    }
+
+    // ── Issue #615: registry_id cross-contract validation ─────────────────────
+
+    /// record_spend must return RegistryNotFound when the linked registry_id
+    /// points to a non-existent contract. This is the regression guard: if the
+    /// validation is removed, the spend succeeds against an invalid registry.
+    #[test]
+    fn test_record_spend_with_invalid_registry_id_returns_registry_not_found() {
+        let (env, client, _) = setup();
+        let wallet = Address::generate(&env);
+        // Use a random address as the registry_id — it is not a deployed contract,
+        // so the cross-contract call will fail.
+        let invalid_registry = Address::generate(&env);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &Some(invalid_registry));
+
+        let result = client.try_record_spend(&wallet, &100_i128);
+        assert_eq!(
+            result,
+            Err(Ok(MuxPolicyError::RegistryNotFound)),
+            "record_spend must fail when the linked registry_id is not a valid contract"
+        );
+    }
+
+    /// record_spend must succeed (no registry check) when registry_id is None.
+    #[test]
+    fn test_record_spend_without_registry_id_succeeds() {
+        let (env, client, _) = setup();
+        let wallet = Address::generate(&env);
+        client.set_daily_limit(&wallet, &1000_i128, &17280_u32, &None);
+
+        assert!(
+            client.try_record_spend(&wallet, &100_i128).is_ok(),
+            "record_spend must succeed when no registry_id is linked"
+        );
+        assert_eq!(client.get_daily_limit(&wallet).spent, 100);
+    }
+
+    /// RegistryNotFound error code must be 9 — stable ABI.
+    #[test]
+    fn test_registry_not_found_error_code_is_9() {
+        assert_eq!(
+            MuxPolicyError::RegistryNotFound as u32,
+            9,
+            "RegistryNotFound must remain error code 9; coordinate with docs/error_codes.md"
+        );
     }
 }
