@@ -115,7 +115,8 @@ Legend:
 ### 1.8 `mux-spending-policy`
 
 - [ ] `initialize` — `admin.require_auth()` called before storage write.
-- [ ] `set_policy` — `require_admin` helper called; only admin can configure limits.
+- [ ] `set_policy` — `require_admin` helper called **before** input validation (fail-closed: unauthenticated callers cannot probe validation state); only admin can configure limits.
+- [ ] `set_policy` — rejects `period_ledgers == 0` with `InvalidPeriod` and `limit <= 0` with `InvalidInput`; no policy is stored and no `lmt_set` event is emitted on either rejection (unit tests: `test_set_policy_rejects_zero_period`, `test_set_policy_rejects_non_positive_limit`, `test_set_policy_auth_checked_before_period_validation`).
 - [ ] `get_policy`, `check_spend` — read-only or validation-only; no auth required (acceptable).
 - [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called; WASM upgrade is admin-gated.
 - [ ] No policy mutation is possible without admin signature.
@@ -328,7 +329,7 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 - [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection, `dlg_link` event emission.
 - [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection, `perm_ok` event emission on grant only.
 - [ ] `mux-registry`: initialize, double-initialize, register/register-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
-- [ ] `mux-spending-policy`: initialize, double-initialize, set-policy, check-spend, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-spending-policy`: initialize, double-initialize, set-policy (including `limit <= 0` → `InvalidInput`, `period_ledgers == 0` → `InvalidPeriod`, and auth-before-validation ordering), check-spend, `upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-wallet-registry`: initialize, double-initialize, register-wallet, register-wallet-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-recovery`: initialize, double-initialize, initiate/cancel/execute recovery, `upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-account-factory`: deploy-account, deploy-with-metadata, cap enforcement, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.

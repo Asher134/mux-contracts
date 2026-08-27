@@ -140,6 +140,7 @@ Errors are defined in `SpendingPolicyError` (`contracts/mux-spending-policy/src/
 | `PolicyNotFound` | 4 | 404 | No spend policy for the account/asset pair |
 | `SpendLimitExceeded` | 5 | 400 | Requested spend exceeds the configured limit |
 | `InvalidInput` | 6 | 400 | Limit is not positive or spend amount is negative |
+| `InvalidPeriod` | 7 | 400 | `period_ledgers` is zero |
 
 ## Mux Wallet Registry (`contracts/mux-wallet-registry`)
 
