@@ -10,6 +10,8 @@
 
 ## Overview
 
+For the repository-wide reserved short-tag registry and collision policy, see [Event Topic Conventions — Repository-wide short-tag registry](event-topic-conventions.md#repository-wide-short-tag-registry). The tags `ses_exe`, `bat_ok`, and `rec_init` are reserved for the events documented below and must not be reused for another action in a different contract.
+
 Every state-mutating operation in Mux contracts emits a Soroban event via `env.events().publish(topics, data)`.  
 Events are indexed on-chain and can be streamed from any Soroban RPC node using the `getEvents` method.
 

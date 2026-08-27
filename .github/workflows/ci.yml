@@ -15,6 +15,19 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ── #680: enforce repository rustfmt.toml ───────────────────────────────────
+  rustfmt:
+    name: Rustfmt (rustfmt.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.81.0
+        with:
+          components: rustfmt
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
+  # ── end #680 ──────────────────────────────────────────────────────────────
+
   # ── #682: scan for leaked secrets ─────────────────────────────────────────
   scan-secrets:
     name: Scan for leaked secrets
