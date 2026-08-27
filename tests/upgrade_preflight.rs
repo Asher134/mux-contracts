@@ -14,7 +14,6 @@
 ///    by a deployer who skips initialization.
 /// 4. No instant admin-mutating entrypoint silently skips auth (spot-checks the
 ///    most critical patterns).
-
 #[cfg(test)]
 mod upgrade_preflight {
     use std::fs;

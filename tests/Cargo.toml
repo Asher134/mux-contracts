@@ -29,3 +29,7 @@ path = "fixture_vectors.rs"
 [[test]]
 name = "upgrade_preflight"
 path = "upgrade_preflight.rs"
+
+[[test]]
+name = "threat_model_coverage"
+path = "threat_model_coverage.rs"

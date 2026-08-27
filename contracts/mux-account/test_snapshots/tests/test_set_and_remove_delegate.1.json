@@ -39,7 +39,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "u32": 1000
+                  "u64": 1000
                 },
                 {
                   "bool": true
@@ -388,7 +388,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "u32": 1000
+                  "u64": 1000
                 },
                 {
                   "bool": true
@@ -421,7 +421,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "u32": 1000
+                  "u64": 1000
                 },
                 {
                   "bool": true
@@ -519,10 +519,10 @@
                       },
                       {
                         "key": {
-                          "symbol": "expiry_ledger"
+                          "symbol": "expires_at"
                         },
                         "val": {
-                          "u32": 1000
+                          "u64": 1000
                         }
                       }
                     ]

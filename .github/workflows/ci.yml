@@ -97,6 +97,8 @@ jobs:
         run: bash scripts/check-doc-examples.sh
       - name: Check architecture docs list every contract crate
         run: bash scripts/check-architecture-docs.sh
+      - name: Check threat model covers every contract crate
+        run: bash scripts/check-threat-model-coverage.sh
       - name: Check CONTRACT_IDS.md / addresses.json stay in sync (#674)
         run: bash scripts/check-contract-ids-sync.sh
       - name: Check security policy is hardened (#673)

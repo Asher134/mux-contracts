@@ -56,6 +56,11 @@ Contract tag: `mux_acct`
 >
 > `register_session_key` and `revoke_session_key` do not currently emit
 > dedicated audit events.
+>
+> `execute_with_session` emits `ses_exe` only on the success path. A rejected
+> call — unknown/revoked/expired key, or an **empty-scope key rejected
+> fail-closed (T-40)** — emits nothing, matching the no-events-on-error
+> convention.
 
 ---
 
