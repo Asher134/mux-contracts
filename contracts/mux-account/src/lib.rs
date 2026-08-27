@@ -1327,4 +1327,3 @@ mod tests {
         // symbol_short! validates length at compile time; reaching here is sufficient.
     }
 }
-pub mod smart_wallet;
