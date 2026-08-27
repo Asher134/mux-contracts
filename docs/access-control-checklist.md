@@ -36,16 +36,19 @@ Legend:
 - [ ] `execute` — `require_owner` helper called; spend limit is checked and the
       reentrancy guard acquired before `target` is invoked, but the debit is
       only written to storage — and the guard only released — after
-      `invoke_contract` returns (checks-effects-interactions; see §5.2).
+      `invoke_contract` returns (checks-effects-interactions; see §5.2);
+      emits `executed` event on success.
 - [ ] `register_session_key` / `revoke_session_key` — `require_owner` helper called.
-- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`).
+- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Fail-closed scope enforcement (T-40):** a key registered with an empty `scopes` list is rejected with `Unauthorized` (unit test: `test_execute_with_session_rejects_empty_scopes`). Remaining limitation: `payload` is not decoded or dispatched, so a **non-empty** scope list is not matched against the payload's target method — see `docs/aa_sequence_diagram.md`.
 - [ ] `set_metadata` — `require_owner` helper called.
+- [ ] `execute_with_session` — `session_key.require_auth()` called, plus revocation/expiry check against the stored `SessionKeyRecord`. **Note:** this validates the session key only; it does not decode or dispatch `payload`, and `SessionKeyRecord.scopes` is stored but not enforced here (tracked gap — see `docs/aa_sequence_diagram.md`); emits `ses_exe` event on success.
+- [ ] `set_metadata` — `require_owner` helper called; emits `meta_set` event.
 - [ ] No public function mutates storage without an auth check.
 
 ### 1.2 `mux-batcher`
 
-- [ ] `execute_batch` — `caller.require_auth()` called before any operations are dispatched.
-- [ ] `simulate_batch` — `caller.require_auth()` called (preflight is also auth-gated).
+- [ ] `execute_batch` — `caller.require_auth()` called before any operations are dispatched; emits `bat_start` before execution, `executed`/`bat_ok`/`bat_abort` on completion.
+- [ ] `simulate_batch` — `caller.require_auth()` called (preflight is also auth-gated); emits `sim_done` on completion.
 - [ ] `submit_batch` — delegates to `execute_batch`, deriving `caller` from the invoker; same auth guarantee applies.
 - [ ] `set_registry_metadata` — `require_admin` helper called before the `MetadataAlreadySet` check (fail-closed: unauthenticated callers cannot probe metadata state); returns `NotInitialized` if `initialize` was never called.
 - [ ] Batch operations are dispatched under the **caller's** auth context, not the batcher contract's.
@@ -58,11 +61,11 @@ Legend:
 - [ ] `create_role` — `require_admin` helper called.
 - [ ] `grant_role` — `require_admin` helper called.
 - [ ] `revoke_role` — `require_admin` helper called.
-- [ ] `has_permission`, `get_roles`, `get_role_members` — read-only; no auth required (acceptable).
+- [ ] `has_permission`, `get_roles`, `get_role_members` — read-only; no auth required (acceptable); `has_permission` emits `perm_ok` on grant only, nothing on denial.
 - [ ] `set_admin_threshold` — `require_admin` helper called.
 - [ ] `propose_admin` — `require_admin` helper called.
 - [ ] `approve_admin` — `require_admin` helper called, plus `approver.require_auth()` for the individual approval.
-- [ ] `set_metadata` — `require_admin` helper called.
+- [ ] `set_metadata` — `require_admin` helper called; emits `meta_set` event.
 - [ ] No role or admin-set mutation is possible without admin signature.
 - [ ] No role mutation is possible without admin signature.
 - [ ] `upgrade` — `require_admin` helper called; WASM upgrade is admin-gated (same helper used by role and multisig-rotation entrypoints).
@@ -104,7 +107,7 @@ Legend:
 
 - [ ] `grant_delegate` — `owner.require_auth()` called before any storage write.
 - [ ] `revoke_delegate` — `owner.require_auth()` called before any storage write.
-- [ ] `link_contract_id` — the caller-supplied `admin` parameter authorizes **itself**; this is **not** checked against any stored admin identity, so it is not a privileged gate against other callers — see `docs/delegation-upgrade.md`.
+- [ ] `link_contract_id` — the caller-supplied `admin` parameter authorizes **itself**; this is **not** checked against any stored admin identity, so it is not a privileged gate against other callers — see `docs/delegation-upgrade.md`; emits `dlg_link` event on success.
 - [ ] `initialize` — `admin.require_auth()` called before storage write; optional (delegation grants work without it) and establishes a **separate** stored admin used only by `upgrade`.
 - [ ] `upgrade` — `require_admin` helper called; `NotInitialized` (fail-closed) if `initialize` was never called.
 - [ ] `get_delegate_permissions`, `is_delegate`, `get_delegates`, `check_delegate`, `get_contract_id` — read-only; no auth required (acceptable).
@@ -321,10 +324,10 @@ rg 'panic!|unreachable!|unimplemented!' contracts/*/src/lib.rs | grep -v '#\[cfg
 
 ## 8. Unit Test Coverage
 
-- [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period, `execute()` reentrancy guard held across invocation (§5.2), guard released on rejection paths.
-- [ ] `mux-batcher`: empty batch, oversized batch, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
-- [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection.
-- [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection.
+- [ ] `mux-account`: `initialize`, double-initialize, delegate CRUD, spend limit enforcement, invalid amount/period, `execute()` reentrancy guard held across invocation (§5.2), guard released on rejection paths, `executed`/`meta_set` event emission.
+- [ ] `mux-batcher`: empty batch, oversized batch, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection, `bat_start`/`bat_abort`/`sim_done` event emission.
+- [ ] `mux-delegation`: grant/revoke CRUD, `initialize`/double-initialize/`upgrade` before `initialize`, `upgrade` auth rejection, `dlg_link` event emission.
+- [ ] `mux-permissions`: initialize, double-initialize, role create/grant/revoke, permission check, nonexistent role grant, admin-threshold promotion (below-threshold no-op, at-threshold transfer), admin-rotation auth rejection, `upgrade` before `initialize`, `upgrade` auth rejection, `perm_ok` event emission on grant only.
 - [ ] `mux-registry`: initialize, double-initialize, register/register-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-spending-policy`: initialize, double-initialize, set-policy (including `limit <= 0` → `InvalidInput`, `period_ledgers == 0` → `InvalidPeriod`, and auth-before-validation ordering), check-spend, `upgrade` before `initialize`, `upgrade` auth rejection.
 - [ ] `mux-wallet-registry`: initialize, double-initialize, register-wallet, register-wallet-with-metadata, `upgrade` before `initialize`, `upgrade` auth rejection.

@@ -15,7 +15,7 @@ fn test_owner_approve_recovery_executes() {
     let guardian = Address::generate(&env);
     let new_owner = Address::generate(&env);
 
-    // initialize contract with owner and one guardian
+    // initialize contract with owner and one guardian (quorum 1-of-1)
     client.initialize(&owner, &vec![&env, guardian.clone()], &1_u32);
 
     // guardian initiates recovery

@@ -224,7 +224,7 @@ pub struct RegistryMeta {
 | `guardians` | — | `Result<Vec<Address>, MuxAccountError>` | Return guardian set |
 | `register_session_key` | `session_key: Address, expires_at: u64, scopes: Vec<Scope>` | `Result<(), MuxAccountError>` | Register or replace a session key (max `MAX_SESSION_KEYS` per owner); owner-only |
 | `revoke_session_key` | `session_key: Address` | `Result<(), MuxAccountError>` | Revoke a registered session key; owner-only |
-| `execute_with_session` | `session_key: Address, payload: Bytes` | `Result<Bytes, MuxAccountError>` | Validate an authorized, non-expired, non-revoked session key (stub — does not decode or execute `payload`; always returns empty `Bytes` on success. See [`docs/aa_sequence_diagram.md`](aa_sequence_diagram.md) for the gap between this and the intended AA execution flow) |
+| `execute_with_session` | `session_key: Address, payload: Bytes` | `Result<Bytes, MuxAccountError>` | Validate an authorized, non-expired, non-revoked session key; **fail-closed scope check (T-40)** — a key with an empty `scopes` list is rejected with `Unauthorized`. Does not decode or execute `payload`; returns empty `Bytes` on success. See [`docs/aa_sequence_diagram.md`](aa_sequence_diagram.md) for the remaining gap (non-empty scopes are not matched against the payload's target method) |
 | `set_metadata` | `meta: RegistryMeta` | `Result<(), MuxAccountError>` | Store registry-level metadata for this account instance; owner-only |
 | `get_metadata` | — | `Option<RegistryMeta>` | Return stored registry metadata, or `None` if not set |
 

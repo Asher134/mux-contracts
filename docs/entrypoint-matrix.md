@@ -35,15 +35,17 @@ by a specific actor; public entrypoints are callable by anyone.
 | `remove_delegate(delegate)` | A | Owner only; paused check |
 | `set_spend_limit(asset, amount, period)` | A | Owner only; paused check |
 | `debit_spend(asset, spend)` | U | Caller (contract) authorizes; paused check; reentrancy guard |
-| `execute(target, function, args, asset, spend)` | A | Owner only; paused check; validates spend limit, then invokes `target` while the reentrancy guard is held, then persists the debit (checks-effects-interactions) |
+| `execute(target, function, args, asset, spend)` | A | Owner only; paused check; validates spend limit, then invokes `target` while the reentrancy guard is held, then persists the debit (checks-effects-interactions); emits `executed` event |
 | `owner()` | P | Read-only |
 | `delegates()` | P | Read-only; filters expired |
 | `get_delegate(delegate)` | P | Read-only |
 | `guardians()` | P | Read-only |
 | `register_session_key(session_key, expires_at, scopes)` | A | Owner only; paused check; capped at `MAX_SESSION_KEYS` |
 | `revoke_session_key(session_key)` | A | Owner only; paused check |
-| `execute_with_session(session_key, payload)` | U | Session key auth; validates registration/revocation/expiry only — does not execute `payload` (see [aa_sequence_diagram.md](aa_sequence_diagram.md)) |
+| `execute_with_session(session_key, payload)` | U | Session key auth; validates registration/revocation/expiry **and enforces scopes fail-closed** — a key registered with an empty `scopes` list is rejected with `Unauthorized` (T-40 in [threat-model.md](threat-model.md)). Does not execute `payload` (see [aa_sequence_diagram.md](aa_sequence_diagram.md)) |
 | `set_metadata(meta)` | A | Owner only |
+| `execute_with_session(session_key, payload)` | U | Session key auth; validates registration/revocation/expiry only — does not execute `payload` (see [aa_sequence_diagram.md](aa_sequence_diagram.md)) |
+| `set_metadata(meta)` | A | Owner only; emits `meta_set` event |
 | `get_metadata()` | P | Read-only |
 
 ## mux-account-factory
@@ -67,13 +69,13 @@ by a specific actor; public entrypoints are callable by anyone.
 |---|---|---|
 | `initialize(admin)` | A | Optional, one-time; sets the upgrade admin only — batching works without it |
 | `upgrade(new_wasm_hash)` | A | Admin only; `NotInitialized` if `initialize` was never called |
-| `execute_batch(caller, ops)` | U | Caller authorizes; reentrancy guard |
+| `execute_batch(caller, ops)` | U | Caller authorizes; reentrancy guard; emits `bat_start` before execution, `executed`/`bat_ok`/`bat_abort` on completion |
 | `submit_batch(ops)` | U | Delegates to `execute_batch` |
 | `estimate_fees(op_count)` | P | Pure computation |
 | `max_batch_size()` | P | Returns constant |
 | `set_registry_metadata(desc, author)` | A | Admin only; one-time; returns `NotInitialized` if `initialize` was never called, `MetadataAlreadySet` on a second call |
 | `get_registry_metadata()` | P | Read-only |
-| `simulate_batch(caller, ops)` | U | Caller authorizes; no state mutation |
+| `simulate_batch(caller, ops)` | U | Caller authorizes; no state mutation; emits `sim_done` on completion |
 
 ## mux-delegation
 
@@ -88,8 +90,8 @@ by a specific actor; public entrypoints are callable by anyone.
 | `is_delegate(owner, delegate, perm)` | P | Read-only |
 | `get_delegates(owner)` | P | Read-only |
 | `check_delegate(owner, delegate, perm)` | P | Read-only; `Ok(())`/`Err(NotADelegate)` variant of `is_delegate` |
-| `link_contract_id(admin, contract_id)` | A | Admin authorizes; write-once |
-| `link_contract_id(admin, contract_id)` | U | Caller-supplied `admin` param authorizes itself; **not** the same identity as the stored upgrade admin — see [delegation-upgrade.md](delegation-upgrade.md) |
+| `link_contract_id(admin, contract_id)` | A | Admin authorizes; write-once; emits `dlg_link` event |
+| `link_contract_id(admin, contract_id)` | U | Caller-supplied `admin` param authorizes itself; **not** the same identity as the stored upgrade admin — see [delegation-upgrade.md](delegation-upgrade.md); emits `dlg_link` event |
 | `get_contract_id()` | P | Read-only |
 
 ## mux-permissions
